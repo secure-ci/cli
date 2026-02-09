@@ -44,11 +44,13 @@ actly/
 ## Core Concepts
 
 ### Workflows
+
 - Defined in YAML files (typically `.github/workflows/*.yml`)
 - Contain jobs, steps, inputs, and secrets
 - Can trigger other workflows and actions
 
 ### Actions
+
 - Reusable units of work
 - Three types supported:
   - **Composite Actions**: Multiple steps defined in YAML
@@ -56,6 +58,7 @@ actly/
   - **Docker Actions**: Show warning (future enhancement)
 
 ### Remote Action Support
+
 - Actions cached in `~/.actly/actions-cache` for performance
 - Fetched from GitHub repositories
 - Supports versioning via git refs (tags, branches, SHAs)
@@ -144,11 +147,13 @@ See [TESTING.md](.github/agents/TESTING.md) for comprehensive testing guidelines
 ## Dependencies
 
 ### Production Dependencies
+
 - **chalk**: Terminal styling
 - **commander**: CLI framework
 - **yaml**: YAML parsing
 
 ### Development Dependencies
+
 - **typescript**: TypeScript compiler
 - **jest**: Testing framework
 - **ts-jest**: TypeScript support for Jest
@@ -187,16 +192,19 @@ actly --validate <file> # Validate workflow syntax
 ## Agent-Specific Notes
 
 ### For GitHub Copilot
+
 - Use TypeScript type annotations for better suggestions
 - Follow existing patterns in the codebase
 - Reference test files for examples
 
 ### For Claude Code
+
 - Consider the full context of the project
 - Maintain consistency with existing code style
 - Use TDD approach for new features
 
 ### For Augment
+
 - Focus on incremental improvements
 - Respect the minimal dependencies philosophy
 - Keep backward compatibility in mind

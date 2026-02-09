@@ -5,6 +5,7 @@ This document outlines code styling and formatting conventions for the actly cod
 ## Overview
 
 actly uses automated tools to maintain consistent code style:
+
 - **ESLint**: For code quality and style enforcement
 - **Prettier**: For automatic code formatting
 - **TypeScript**: For type safety with strict mode enabled
@@ -24,20 +25,20 @@ npm run build         # Verify TypeScript compilation
 ```json
 {
   "compilerOptions": {
-    "target": "ES2020",              // Modern JavaScript features
-    "module": "commonjs",            // Node.js module system
-    "lib": ["ES2020"],               // Standard library
-    "strict": true,                  // Strict type checking
-    "esModuleInterop": true,         // CommonJS/ES modules compatibility
-    "skipLibCheck": true,            // Skip type checking of declaration files
+    "target": "ES2020", // Modern JavaScript features
+    "module": "commonjs", // Node.js module system
+    "lib": ["ES2020"], // Standard library
+    "strict": true, // Strict type checking
+    "esModuleInterop": true, // CommonJS/ES modules compatibility
+    "skipLibCheck": true, // Skip type checking of declaration files
     "forceConsistentCasingInFileNames": true,
-    "resolveJsonModule": true,       // Import JSON files
-    "declaration": true,             // Generate .d.ts files
-    "declarationMap": true,          // Generate declaration source maps
-    "sourceMap": true,               // Generate source maps
-    "moduleResolution": "node",      // Node.js module resolution
-    "outDir": "./dist",              // Output directory
-    "rootDir": "./src"               // Source root directory
+    "resolveJsonModule": true, // Import JSON files
+    "declaration": true, // Generate .d.ts files
+    "declarationMap": true, // Generate declaration source maps
+    "sourceMap": true, // Generate source maps
+    "moduleResolution": "node", // Node.js module resolution
+    "outDir": "./dist", // Output directory
+    "rootDir": "./src" // Source root directory
   }
 }
 ```
@@ -55,10 +56,7 @@ npm run build         # Verify TypeScript compilation
 ```javascript
 module.exports = {
   parser: '@typescript-eslint/parser',
-  extends: [
-    'eslint:recommended',
-    'plugin:@typescript-eslint/recommended'
-  ],
+  extends: ['eslint:recommended', 'plugin:@typescript-eslint/recommended'],
   parserOptions: {
     ecmaVersion: 2020,
     sourceType: 'module'
@@ -146,15 +144,15 @@ export { parseWorkflow };
 class WorkflowParser {
   // Private properties: camelCase with _ prefix (optional)
   private _config: Config;
-  
+
   // Public properties: camelCase
   public workflowPath: string;
-  
+
   // Methods: camelCase
   public parseWorkflow(): Workflow {
     return this.internalParse();
   }
-  
+
   private internalParse(): Workflow {
     // Implementation
   }
@@ -252,8 +250,8 @@ export const validateWorkflow = (path: string): ValidationResult => {
 
 ```typescript
 // ✅ Good - arrow functions for callbacks
-const results = workflows.map(w => w.name);
-items.forEach(item => console.log(item));
+const results = workflows.map((w) => w.name);
+items.forEach((item) => console.log(item));
 
 // ✅ Good - arrow functions for short inline functions
 const double = (n: number) => n * 2;
@@ -364,8 +362,9 @@ async function loadWorkflow(path: string): Promise<Workflow> {
 
 // ❌ Avoid (unless necessary)
 function loadWorkflow(path: string): Promise<Workflow> {
-  return fs.promises.readFile(path, 'utf-8')
-    .then(content => YAML.parse(content));
+  return fs.promises
+    .readFile(path, 'utf-8')
+    .then((content) => YAML.parse(content));
 }
 ```
 
@@ -403,9 +402,12 @@ const newWorkflow = Object.assign({}, workflow, { name: 'Updated' });
 const status = isValid ? 'success' : 'failure';
 
 // ❌ Avoid for complex conditions
-const status = isValid && hasJobs && !hasErrors
-  ? 'success'
-  : hasWarnings ? 'warning' : 'failure'; // Too complex
+const status =
+  isValid && hasJobs && !hasErrors
+    ? 'success'
+    : hasWarnings
+      ? 'warning'
+      : 'failure'; // Too complex
 ```
 
 #### Use Early Returns
@@ -416,11 +418,11 @@ function validateInput(input: string): boolean {
   if (!input) {
     return false;
   }
-  
+
   if (input.length < 3) {
     return false;
   }
-  
+
   return true;
 }
 
@@ -520,6 +522,7 @@ console.log(chalk.yellow('⚠ Warning'));
 ## Summary for AI Agents
 
 Key style points:
+
 - TypeScript with strict mode
 - 2-space indentation
 - Single quotes, semicolons

@@ -59,10 +59,10 @@ describe('ModuleName', () => {
     it('should do something specific', () => {
       // Arrange
       const input = 'test input';
-      
+
       // Act
       const result = functionToTest(input);
-      
+
       // Assert
       expect(result).toBe(expected);
     });
@@ -110,7 +110,7 @@ describe('parseWorkflowInputs', () => {
   it('should parse simple key-value inputs', () => {
     const input = ['key1=value1', 'key2=value2'];
     const result = parseWorkflowInputs(input);
-    
+
     expect(result).toEqual({
       key1: 'value1',
       key2: 'value2'
@@ -128,9 +128,9 @@ describe('Workflow Execution', () => {
   it('should execute workflow with remote actions', async () => {
     const workflow = loadWorkflow('workflow-with-remote-actions.yml');
     const executor = new WorkflowExecutor();
-    
+
     const result = await executor.execute(workflow);
-    
+
     expect(result.success).toBe(true);
     expect(result.steps).toHaveLength(3);
   });
@@ -144,11 +144,11 @@ Use YAML fixtures for realistic scenarios.
 ```typescript
 describe('Action Parser', () => {
   const fixturesDir = path.join(__dirname, '../../test/fixtures');
-  
+
   it('should parse composite action', () => {
     const actionPath = path.join(fixturesDir, 'simple-action.yml');
     const action = parseAction(actionPath);
-    
+
     expect(action.runs.using).toBe('composite');
     expect(action.runs.steps).toBeDefined();
   });
@@ -162,6 +162,7 @@ describe('Action Parser', () => {
 Store test YAML files in `test/fixtures/`:
 
 **Example: `test/fixtures/simple-workflow.yml`**
+
 ```yaml
 name: Simple Workflow
 on: push
@@ -174,6 +175,7 @@ jobs:
 ```
 
 **Example: `test/fixtures/invalid-workflow.yml`**
+
 ```yaml
 # Missing required 'on' field
 name: Invalid Workflow
@@ -226,12 +228,14 @@ From `jest.config.js`:
 ## Coverage Requirements
 
 Minimum coverage thresholds:
+
 - **Branches**: 65%
 - **Functions**: 80%
 - **Lines**: 80%
 - **Statements**: 80%
 
 Excluded from coverage:
+
 - Type definition files (`*.d.ts`)
 - Test files (`*.test.ts`)
 - CLI entry point (`cli.ts`)
@@ -274,6 +278,7 @@ This automatically re-runs tests when files change.
 ### 1. Descriptive Test Names
 
 ✅ Good:
+
 ```typescript
 it('should return empty array when no workflows are found', () => {
   // ...
@@ -281,6 +286,7 @@ it('should return empty array when no workflows are found', () => {
 ```
 
 ❌ Bad:
+
 ```typescript
 it('test 1', () => {
   // ...
@@ -293,10 +299,10 @@ it('test 1', () => {
 it('should parse workflow inputs correctly', () => {
   // Arrange
   const input = ['key=value'];
-  
+
   // Act
   const result = parseInputs(input);
-  
+
   // Assert
   expect(result).toEqual({ key: 'value' });
 });
@@ -308,11 +314,17 @@ Each test should verify a single behavior:
 
 ```typescript
 // Good - separate tests
-it('should handle valid input', () => { /* ... */ });
-it('should throw on invalid input', () => { /* ... */ });
+it('should handle valid input', () => {
+  /* ... */
+});
+it('should throw on invalid input', () => {
+  /* ... */
+});
 
 // Bad - testing multiple things
-it('should handle valid and invalid input', () => { /* ... */ });
+it('should handle valid and invalid input', () => {
+  /* ... */
+});
 ```
 
 ### 4. Use Meaningful Assertions
@@ -344,10 +356,18 @@ Always test both success and failure scenarios:
 
 ```typescript
 describe('validateWorkflow', () => {
-  it('should validate correct workflow', () => { /* ... */ });
-  it('should reject invalid workflow', () => { /* ... */ });
-  it('should handle missing file', () => { /* ... */ });
-  it('should handle malformed YAML', () => { /* ... */ });
+  it('should validate correct workflow', () => {
+    /* ... */
+  });
+  it('should reject invalid workflow', () => {
+    /* ... */
+  });
+  it('should handle missing file', () => {
+    /* ... */
+  });
+  it('should handle malformed YAML', () => {
+    /* ... */
+  });
 });
 ```
 
@@ -356,15 +376,15 @@ describe('validateWorkflow', () => {
 ```typescript
 describe('ActionFetcher', () => {
   let fetcher: ActionFetcher;
-  
+
   beforeEach(() => {
     fetcher = new ActionFetcher();
   });
-  
+
   afterEach(() => {
     // Cleanup
   });
-  
+
   it('should fetch action', async () => {
     // Test with fetcher
   });
@@ -401,7 +421,7 @@ import * as path from 'path';
 it('should read workflow file', () => {
   const workflowPath = path.join(fixturesDir, 'workflow.yml');
   const content = fs.readFileSync(workflowPath, 'utf-8');
-  
+
   expect(content).toContain('name: Test Workflow');
 });
 ```
@@ -414,7 +434,7 @@ import * as YAML from 'yaml';
 it('should parse YAML content', () => {
   const yamlContent = 'name: Test\non: push';
   const parsed = YAML.parse(yamlContent);
-  
+
   expect(parsed.name).toBe('Test');
   expect(parsed.on).toBe('push');
 });
@@ -426,7 +446,7 @@ it('should parse YAML content', () => {
 it('should parse CLI arguments', () => {
   const args = ['--dry-run', 'workflow.yml', '--input', 'key=value'];
   const parsed = parseArguments(args);
-  
+
   expect(parsed.dryRun).toBe(true);
   expect(parsed.workflow).toBe('workflow.yml');
   expect(parsed.inputs).toEqual({ key: 'value' });
@@ -468,6 +488,7 @@ it.skip('should skip this test', () => {
 ## Continuous Integration
 
 Tests run automatically in CI:
+
 - All tests must pass
 - Coverage thresholds must be met
 - No console errors or warnings
@@ -475,6 +496,7 @@ Tests run automatically in CI:
 ## When to Add Tests
 
 ### Always Add Tests For:
+
 - New features
 - Bug fixes
 - Refactored code
@@ -482,6 +504,7 @@ Tests run automatically in CI:
 - Complex logic
 
 ### Tests May Be Optional For:
+
 - Simple getters/setters
 - Trivial utility functions
 - TypeScript type definitions
@@ -490,12 +513,14 @@ Tests run automatically in CI:
 ## Test Maintenance
 
 ### Keeping Tests Green
+
 - Run tests before committing: `npm test`
 - Fix failing tests immediately
 - Don't commit commented-out tests
 - Remove obsolete tests
 
 ### Updating Tests
+
 - Update tests when requirements change
 - Refactor tests along with code
 - Keep test code clean and maintainable
@@ -509,6 +534,7 @@ Tests run automatically in CI:
 ## Summary Checklist for AI Agents
 
 When writing tests:
+
 - [ ] Use descriptive test names
 - [ ] Follow Arrange-Act-Assert pattern
 - [ ] Test one thing per test

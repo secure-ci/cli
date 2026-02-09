@@ -116,16 +116,19 @@ actly/
 **Purpose**: Provide command-line interface for users.
 
 **Responsibilities**:
+
 - Parse command-line arguments using Commander.js
 - Display help and usage information
 - Route commands to appropriate modules
 - Handle CLI-specific error display
 
 **Key Technologies**:
+
 - `commander`: CLI framework
 - `chalk`: Terminal styling
 
 **Example Usage**:
+
 ```typescript
 // cli.ts structure
 import { Command } from 'commander';
@@ -151,12 +154,14 @@ program
 **Purpose**: Parse GitHub Actions workflow YAML files.
 
 **Responsibilities**:
+
 - Read YAML workflow files from filesystem
 - Parse YAML into JavaScript objects
 - Extract workflow metadata (name, triggers, jobs)
 - Convert to internal Workflow type
 
 **Key Functions**:
+
 ```typescript
 function parseWorkflow(workflowPath: string): Workflow;
 function parseWorkflowContent(content: string): Workflow;
@@ -167,11 +172,13 @@ function parseWorkflowContent(content: string): Workflow;
 **Purpose**: Parse GitHub Actions action YAML files (action.yml/action.yaml).
 
 **Responsibilities**:
+
 - Parse action metadata (name, description, inputs, outputs)
 - Handle composite, JavaScript, and Docker action types
 - Extract action configuration
 
 **Key Functions**:
+
 ```typescript
 function parseAction(actionPath: string): Action;
 ```
@@ -181,12 +188,14 @@ function parseAction(actionPath: string): Action;
 **Purpose**: Validate workflow and action structure.
 
 **Responsibilities**:
+
 - Validate required fields are present
 - Check for valid job structure
 - Validate step definitions
 - Return validation result with errors
 
 **Key Functions**:
+
 ```typescript
 function validateWorkflow(workflowPath: string): ValidationResult;
 function validateAction(actionPath: string): ValidationResult;
@@ -204,6 +213,7 @@ interface ValidationResult {
 **Purpose**: Simulate workflow execution without running commands.
 
 **Responsibilities**:
+
 - Parse workflow structure
 - Display what would be executed
 - Validate workflow can be executed
@@ -216,6 +226,7 @@ interface ValidationResult {
 **Purpose**: Execute workflows and actions locally.
 
 **Responsibilities**:
+
 - Execute workflow jobs and steps sequentially
 - Handle inputs and secrets
 - Run shell commands and scripts
@@ -223,8 +234,12 @@ interface ValidationResult {
 - Report execution status and results
 
 **Key Functions**:
+
 ```typescript
-async function executeWorkflow(workflow: Workflow, options: ExecutionOptions): Promise<ExecutionResult>;
+async function executeWorkflow(
+  workflow: Workflow,
+  options: ExecutionOptions
+): Promise<ExecutionResult>;
 ```
 
 #### Action Fetcher (`runner/action-fetcher.ts`)
@@ -232,6 +247,7 @@ async function executeWorkflow(workflow: Workflow, options: ExecutionOptions): P
 **Purpose**: Fetch and cache remote GitHub Actions.
 
 **Responsibilities**:
+
 - Parse action references (e.g., `actions/checkout@v3`)
 - Download actions from GitHub
 - Cache actions locally in `~/.actly/actions-cache`
@@ -239,6 +255,7 @@ async function executeWorkflow(workflow: Workflow, options: ExecutionOptions): P
 - Handle versioning (tags, branches, commit SHAs)
 
 **Key Features**:
+
 - **Caching**: Actions cached by owner/repo@ref for performance
 - **Version Support**: Tags (v1, v3), branches (main), SHAs (abc123)
 - **Action Types**:
@@ -247,6 +264,7 @@ async function executeWorkflow(workflow: Workflow, options: ExecutionOptions): P
   - Docker: Shows warning (future support)
 
 **Key Functions**:
+
 ```typescript
 async function fetchAction(actionRef: string): Promise<ActionMetadata>;
 function getCachedAction(actionRef: string): ActionMetadata | null;
@@ -259,11 +277,13 @@ function getCachedAction(actionRef: string): ActionMetadata | null;
 **Purpose**: Centralized logging with styling.
 
 **Responsibilities**:
+
 - Provide consistent log formatting
 - Support different log levels (info, warn, error, success)
 - Use chalk for colored output
 
 **Example Usage**:
+
 ```typescript
 import { logger } from '../utils/logger';
 
@@ -318,7 +338,7 @@ interface Action {
 interface ActionRuns {
   using: 'composite' | 'node12' | 'node16' | 'node20' | 'docker';
   steps?: Step[]; // For composite actions
-  main?: string;  // For JavaScript actions
+  main?: string; // For JavaScript actions
   image?: string; // For Docker actions
 }
 
@@ -422,6 +442,7 @@ Display Results (CLI)
 ### 1. Separation of Concerns
 
 Each layer has distinct responsibilities:
+
 - **CLI**: User interaction only
 - **Parser**: Data transformation only
 - **Runner**: Execution logic only
@@ -466,6 +487,7 @@ try {
 ### 4. Type Safety
 
 Use TypeScript's type system extensively:
+
 - All public functions have explicit return types
 - Use interfaces for data structures
 - Avoid `any` type (use `unknown` if needed)
@@ -479,7 +501,7 @@ Prefer async/await over raw promises for cleaner code:
 async function fetchAction(ref: string): Promise<Action> {
   const cached = getCachedAction(ref);
   if (cached) return cached;
-  
+
   const action = await downloadAction(ref);
   await cacheAction(ref, action);
   return action;
@@ -556,6 +578,7 @@ async function fetchAction(ref: string): Promise<Action> {
 ### Unit Tests
 
 Test individual functions in isolation:
+
 - Parser functions with YAML fixtures
 - Validator logic with valid/invalid inputs
 - Utility functions
@@ -563,6 +586,7 @@ Test individual functions in isolation:
 ### Integration Tests
 
 Test interactions between modules:
+
 - Full workflow parsing and validation
 - Action fetching and execution
 - End-to-end CLI commands (future)
@@ -570,6 +594,7 @@ Test interactions between modules:
 ### Fixtures
 
 Use realistic YAML files in `test/fixtures/`:
+
 - Simple valid workflows
 - Complex workflows with multiple jobs
 - Invalid workflows for error testing
@@ -615,6 +640,7 @@ When modifying the architecture:
 ## Summary for AI Agents
 
 Key architectural principles:
+
 - **Layered Architecture**: CLI → Parser → Runner → Utils
 - **Separation of Concerns**: Each module has a single responsibility
 - **Type Safety**: Extensive use of TypeScript types
