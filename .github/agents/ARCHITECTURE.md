@@ -8,44 +8,38 @@ actly is a CLI tool that enables local testing of GitHub Actions and workflows. 
 
 ## High-Level Architecture
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                         CLI Layer                           │
-│                      (cli.ts, index.ts)                     │
-│  - Command-line interface using Commander.js                │
-│  - Entry point for users                                    │
-└──────────────────┬──────────────────────────────────────────┘
-                   │
-                   ▼
-┌─────────────────────────────────────────────────────────────┐
-│                      Parser Layer                           │
-│              (parser/workflow-parser.ts,                    │
-│               parser/action-parser.ts,                      │
-│               parser/validator.ts)                          │
-│  - Parse YAML workflow and action files                     │
-│  - Validate syntax and structure                            │
-│  - Convert YAML to internal data structures                 │
-└──────────────────┬──────────────────────────────────────────┘
-                   │
-                   ▼
-┌─────────────────────────────────────────────────────────────┐
-│                      Runner Layer                           │
-│              (runner/dry-run.ts,                            │
-│               runner/executor.ts,                           │
-│               runner/action-fetcher.ts)                     │
-│  - Execute workflows and actions                            │
-│  - Dry-run mode for sanity checks                           │
-│  - Fetch and cache remote actions from GitHub               │
-└──────────────────┬──────────────────────────────────────────┘
-                   │
-                   ▼
-┌─────────────────────────────────────────────────────────────┐
-│                      Utils Layer                            │
-│                  (utils/logger.ts, etc.)                    │
-│  - Logging utilities                                        │
-│  - Helper functions                                         │
-│  - Shared utilities                                         │
-└─────────────────────────────────────────────────────────────┘
+```mermaid
+graph TB
+    subgraph CLI["CLI Layer"]
+        CLI1[cli.ts, index.ts]
+        CLI2[Command-line interface<br/>using Commander.js]
+        CLI3[Entry point for users]
+    end
+
+    subgraph Parser["Parser Layer"]
+        P1[workflow-parser.ts<br/>action-parser.ts<br/>validator.ts]
+        P2[Parse YAML workflow<br/>and action files]
+        P3[Validate syntax<br/>and structure]
+        P4[Convert YAML to<br/>internal data structures]
+    end
+
+    subgraph Runner["Runner Layer"]
+        R1[dry-run.ts<br/>executor.ts<br/>action-fetcher.ts]
+        R2[Execute workflows<br/>and actions]
+        R3[Dry-run mode for<br/>sanity checks]
+        R4[Fetch and cache<br/>remote actions from GitHub]
+    end
+
+    subgraph Utils["Utils Layer"]
+        U1[logger.ts, etc.]
+        U2[Logging utilities]
+        U3[Helper functions]
+        U4[Shared utilities]
+    end
+
+    CLI --> Parser
+    Parser --> Runner
+    Runner --> Utils
 ```
 
 ## Directory Structure
@@ -102,7 +96,7 @@ actly/
 │
 ├── package.json                  # Node.js project configuration
 ├── tsconfig.json                 # TypeScript configuration
-├── jest.config.js                # Jest testing configuration
+├── vitest.config.ts              # Vitest testing configuration
 ├── .eslintrc.js                  # ESLint configuration
 ├── .gitignore                    # Git ignore rules
 ├── AGENTS.md                     # Main AI agent guidance
@@ -358,83 +352,61 @@ interface ExecutionResult {
 
 ## Data Flow
 
+> **Note for AI Agents**: Use Mermaid diagrams for flow visualizations. They are clearer, maintainable, and render in GitHub/IDEs.
+
 ### Workflow Validation Flow
 
-```
-User Command
-    │
-    ▼
-CLI Parser (cli.ts)
-    │
-    ▼
-Validator (validator.ts)
-    │
-    ├──► Read YAML file (fs.readFileSync)
-    │
-    ├──► Parse YAML (YAML.parse)
-    │
-    ├──► Validate structure
-    │     ├── Check required fields
-    │     ├── Validate job structure
-    │     └── Validate step definitions
-    │
-    ▼
-Return ValidationResult
-    │
-    ▼
-Display to User (CLI)
+```mermaid
+graph TD
+    A[User Command] --> B[CLI Parser<br/>cli.ts]
+    B --> C[Validator<br/>validator.ts]
+    C --> D[Read YAML file<br/>fs.readFileSync]
+    D --> E[Parse YAML<br/>YAML.parse]
+    E --> F[Validate structure]
+    F --> G[Check required fields]
+    F --> H[Validate job structure]
+    F --> I[Validate step definitions]
+    G --> J[Return ValidationResult]
+    H --> J
+    I --> J
+    J --> K[Display to User<br/>CLI]
 ```
 
 ### Workflow Execution Flow
 
-```
-User Command
-    │
-    ▼
-CLI Parser (cli.ts)
-    │
-    ▼
-Workflow Parser (workflow-parser.ts)
-    │
-    ├──► Read YAML file
-    ├──► Parse to Workflow type
-    │
-    ▼
-Executor (executor.ts)
-    │
-    ├──► For each job:
-    │     │
-    │     ├──► For each step:
-    │     │     │
-    │     │     ├──► If step.run:
-    │     │     │     └──► Execute shell command
-    │     │     │
-    │     │     ├──► If step.uses:
-    │     │     │     │
-    │     │     │     ▼
-    │     │     Action Fetcher (action-fetcher.ts)
-    │     │     │
-    │     │     ├──► Check cache
-    │     │     │
-    │     │     ├──► If not cached:
-    │     │     │     ├──► Fetch from GitHub
-    │     │     │     └──► Cache locally
-    │     │     │
-    │     │     ├──► Parse action.yml
-    │     │     │
-    │     │     ├──► Execute based on type:
-    │     │     │     ├── Composite: Execute steps
-    │     │     │     ├── JavaScript: Run with Node.js
-    │     │     │     └── Docker: Show warning
-    │     │     │
-    │     │     └──► Return result
-    │     │
-    │     └──► Collect step results
-    │
-    └──► Return ExecutionResult
-        │
-        ▼
-Display Results (CLI)
+```mermaid
+graph TD
+    A[User Command] --> B[CLI Parser<br/>cli.ts]
+    B --> C[Workflow Parser<br/>workflow-parser.ts]
+    C --> D[Read YAML file]
+    C --> E[Parse to Workflow type]
+    D --> F[Executor<br/>executor.ts]
+    E --> F
+    F --> G{For each job}
+    G --> H{For each step}
+    H --> I{Step type?}
+    I -->|step.run| J[Execute shell command]
+    I -->|step.uses| K[Action Fetcher<br/>action-fetcher.ts]
+    K --> L{Cached?}
+    L -->|No| M[Fetch from GitHub]
+    M --> N[Cache locally]
+    L -->|Yes| O[Parse action.yml]
+    N --> O
+    O --> P{Action type?}
+    P -->|Composite| Q[Execute steps recursively]
+    P -->|JavaScript| R[Run with Node.js]
+    P -->|Docker| S[Show warning]
+    Q --> T[Return result]
+    R --> T
+    S --> T
+    J --> U[Collect step results]
+    T --> U
+    U --> V{More steps?}
+    V -->|Yes| H
+    V -->|No| W{More jobs?}
+    W -->|Yes| G
+    W -->|No| X[Return ExecutionResult]
+    X --> Y[Display Results<br/>CLI]
 ```
 
 ## Design Patterns
