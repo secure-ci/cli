@@ -119,6 +119,11 @@ export interface RunOptions {
   secrets?: Record<string, string>;
   job?: string;
   verbose?: boolean;
+  useDocker?: boolean;
+  dockerImage?: string;
+  dockerTimeout?: number;
+  disableNetwork?: boolean;
+  dockerMemoryLimit?: string;
 }
 
 export interface StepResult {
