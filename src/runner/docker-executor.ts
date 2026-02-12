@@ -12,6 +12,7 @@ export interface DockerExecutionOptions {
   timeout?: number;
   memoryLimit?: string;
   disableNetwork?: boolean;
+  shell?: string;
 }
 
 /**
@@ -75,7 +76,8 @@ export class DockerExecutor {
       env: options.env,
       workingDir: options.workingDir,
       memoryLimit: options.memoryLimit,
-      disableNetwork: options.disableNetwork ?? true
+      disableNetwork: options.disableNetwork ?? true, // Network access disabled by default for security
+      shell: options.shell || 'sh'
     });
 
     let timeoutHandle: NodeJS.Timeout | null = null;
@@ -198,6 +200,7 @@ export class DockerExecutor {
     workingDir?: string;
     memoryLimit?: string;
     disableNetwork: boolean;
+    shell: string;
   }): Promise<Docker.Container> {
     // Prepare environment variables
     const envArray: string[] = [];
@@ -208,7 +211,7 @@ export class DockerExecutor {
     }
 
     // Prepare command
-    const cmd = Array.isArray(config.command) ? config.command : ['sh', '-c', config.command];
+    const cmd = Array.isArray(config.command) ? config.command : [config.shell, '-c', config.command];
 
     // Container configuration
     const containerConfig: Docker.ContainerCreateOptions = {
