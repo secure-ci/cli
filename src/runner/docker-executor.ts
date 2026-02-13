@@ -82,6 +82,7 @@ export class DockerExecutor {
 
     let timeoutHandle: NodeJS.Timeout | null = null;
     let cleanedUp = false;
+    let timedOut = false;
 
     try {
       // Start container
@@ -91,6 +92,7 @@ export class DockerExecutor {
       const timeout = options.timeout || 300000;
       const timeoutPromise = new Promise<never>((_, reject) => {
         timeoutHandle = setTimeout(async () => {
+          timedOut = true;
           // Try to stop the container on timeout
           try {
             await container.stop();
@@ -101,7 +103,7 @@ export class DockerExecutor {
         }, timeout);
       });
 
-      // Attach to output streams
+      // Attach to output streams and collect output concurrently
       const stream = await container.logs({
         stdout: true,
         stderr: true,
@@ -110,18 +112,25 @@ export class DockerExecutor {
 
       // Collect output
       let output = '';
-      stream.on('data', (chunk: Buffer) => {
-        output += this.cleanDockerOutput(chunk);
-      });
-
-      // Wait for stream to complete
-      await new Promise<void>((resolve) => {
+      const streamPromise = new Promise<void>((resolve, reject) => {
+        stream.on('data', (chunk: Buffer) => {
+          output += this.cleanDockerOutput(chunk);
+        });
         stream.on('end', resolve);
+        stream.on('error', reject);
       });
 
-      // Wait for container with timeout
+      // Wait for container with timeout, racing both container completion and timeout
       const result = await Promise.race([
-        container.wait(),
+        container.wait().then(async (waitResult) => {
+          // If timeout already fired, ignore the wait result
+          if (timedOut) {
+            return new Promise<never>(() => {}); // Never resolve
+          }
+          // Wait for stream to finish collecting output after container exits
+          await streamPromise;
+          return waitResult;
+        }),
         timeoutPromise
       ]);
 
