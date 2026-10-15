@@ -1,4 +1,4 @@
-name: SecureCI
+name: SecureCI Validate
 description: Validate GitHub Actions workflows and check them against a pipeline contract, with optional SARIF upload to code scanning.
 author: SecureCI
 branding:
