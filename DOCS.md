@@ -284,9 +284,10 @@ jobs:
           # files: .github/workflows/*.yml   # default: every file in .github/workflows
           # format: sarif                    # or json
           # upload-sarif: true               # set false to skip code-scanning upload
+          # inventory: check                 # also fail when an action tag moved (needs a committed secureci.lock)
 ```
 
-The job fails if any workflow is invalid or violates the contract. Inputs: `files`, `contract`, `contract-recurse`, `format`, `output`, `upload-sarif`, `version` (which `@secureci/cli` to run), and `github-token`.
+The job fails if any workflow is invalid or violates the contract. Inputs: `files`, `contract`, `contract-recurse`, `format`, `output`, `upload-sarif`, `inventory` (`check` to also run `secureci inventory --check`), `version` (which `@secureci/cli` to run), and `github-token`.
 
 Reference the action by a [release tag](https://github.com/secure-ci/cli/releases) such as `v0.1.1`. There is no moving major tag (`@v1`, `@v0`), so a ref like that won't resolve. `secureci init workflow` fills in the tag matching your installed CLI. The action runs [`@secureci/cli`](https://www.npmjs.com/package/@secureci/cli) from npm via `npx`; set the `version` input to pin which CLI release it runs (default `latest`).
 
@@ -313,15 +314,15 @@ Auditors and assessors increasingly treat the CI pipeline as part of the softwar
 | `secureci.lock`                                   | `secureci inventory`                                                  | An inventory of every third-party action and the commit each tag resolved to |
 | `secureci.lock` history                           | `git log -p secureci.lock`                                            | When each action was added or changed, and in which commit                   |
 | SARIF / JSON report                               | `secureci validate --format sarif\|json`                              | The result of the contract check for a given commit                          |
-| Required check on pull requests                   | The [GitHub Action](#use-in-ci-github-action) and `inventory --check` | Non-conforming or drifted workflows cannot merge                             |
+| Required check on pull requests                   | The [GitHub Action](#use-in-ci-github-action) with `inventory: check` | Non-conforming or drifted workflows cannot merge                             |
 
-To keep a report per run, add a drift check and upload the report as a build artifact:
+To keep a report per run, turn on the action's drift check and upload the report as a build artifact:
 
 ```yaml
 - uses: secure-ci/cli@v0.1.1 # writes secureci-results.sarif
   with:
     contract: contracts/standard.yml
-- run: npx --yes @secureci/cli inventory --check
+    inventory: check # fail on drift against the committed secureci.lock
 - uses: actions/upload-artifact@v4
   if: always()
   with:
