@@ -6,6 +6,7 @@ import {
   WorkflowFile
 } from '../types';
 import { validateExpression } from '../runner/expression';
+import { dangerousTriggerErrors } from './dangerous-triggers';
 
 /**
  * Invalid `if:` expressions in a workflow: syntax errors, or contexts and
@@ -137,6 +138,7 @@ export function validateWorkflow(filePath: string): ValidationResult {
     }
 
     errors.push(...workflowExpressionErrors(workflow));
+    errors.push(...dangerousTriggerErrors(workflow));
   } catch (error) {
     errors.push({
       path: 'root',
@@ -146,7 +148,8 @@ export function validateWorkflow(filePath: string): ValidationResult {
   }
 
   return {
-    valid: errors.length === 0,
+    // Warnings (e.g. a privileged trigger used safely) don't fail validation.
+    valid: errors.every((e) => e.severity === 'warning'),
     errors
   };
 }

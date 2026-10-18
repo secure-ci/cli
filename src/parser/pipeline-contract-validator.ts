@@ -11,6 +11,7 @@ import {
 } from '../types';
 import { topologicalJobOrder } from '../runner/job-plan';
 import { parseFile } from './workflow-parser';
+import { forbiddenTriggerErrors } from './dangerous-triggers';
 import { repositoryRoot } from '../utils/repository';
 import { fetchAction, fetchRepoFile } from '../runner/action-fetcher';
 import { findLockfile, readLockfile } from '../github-lockfile';
@@ -244,6 +245,12 @@ export async function validatePipelineContract(
 
   if (spec.lockfile?.required) {
     errors.push(...checkLockfile(parsed, sequence.filter(isRemote)));
+  }
+
+  // Only the workflow's own on: matters: a called reusable workflow runs
+  // under its caller's event.
+  if (spec.forbiddenTriggers) {
+    errors.push(...forbiddenTriggerErrors(parsed.file, spec.forbiddenTriggers));
   }
 
   return {
