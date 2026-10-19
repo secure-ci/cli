@@ -157,6 +157,13 @@ export interface PipelineContractSpec {
   lockfile?: {
     required?: boolean;
   };
+  /**
+   * Known security advisories (`secureci/vulnerable-action`): findings at
+   * or above `failOn` are errors, the rest warnings. Default: high.
+   */
+  advisories?: {
+    failOn?: 'critical' | 'high' | 'medium' | 'low';
+  };
 }
 
 export interface PipelineContractEntry {
@@ -172,6 +179,8 @@ export interface ValidationError {
   path: string;
   message: string;
   severity: 'error' | 'warning';
+  /** SARIF rule id, e.g. "secureci/injection"; derived from the path when unset. */
+  rule?: string;
 }
 
 export interface ParsedWorkflow {

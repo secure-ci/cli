@@ -1,6 +1,7 @@
 import * as fs from 'fs';
 import * as YAML from 'yaml';
 import { PipelineContractEntry, PipelineContractSpec } from '../types';
+import { FAIL_ON_LEVELS, FailOn } from '../advisories';
 
 /**
  * Parse a pipeline contract file (`secureci validate --contract <file>`).
@@ -14,6 +15,8 @@ import { PipelineContractEntry, PipelineContractSpec } from '../types';
  *   - uses: org/deploy
  * forbidden:
  *   - uses: org/legacy-deploy
+ * advisories:
+ *   fail-on: high      # critical | high (default) | medium | low
  * ```
  */
 export function parsePipelineContract(filePath: string): PipelineContractSpec {
@@ -90,6 +93,26 @@ export function parsePipelineContract(filePath: string): PipelineContractSpec {
         throw new Error('Contract "lockfile.required" must be true or false');
       }
       result.lockfile.required = lockfile.required;
+    }
+  }
+  if (spec.advisories !== undefined) {
+    if (
+      typeof spec.advisories !== 'object' ||
+      spec.advisories === null ||
+      Array.isArray(spec.advisories)
+    ) {
+      throw new Error('Contract "advisories" must be a mapping');
+    }
+    const advisories = spec.advisories as Record<string, unknown>;
+    result.advisories = {};
+    if (advisories['fail-on'] !== undefined) {
+      const level = String(advisories['fail-on']).toLowerCase();
+      if (!(FAIL_ON_LEVELS as readonly string[]).includes(level)) {
+        throw new Error(
+          `Contract "advisories.fail-on" must be one of ${FAIL_ON_LEVELS.join(', ')}, got "${String(advisories['fail-on'])}"`
+        );
+      }
+      result.advisories.failOn = level as FailOn;
     }
   }
   if (spec['allowed-owners'] !== undefined) {

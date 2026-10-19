@@ -27,6 +27,7 @@ src/
 ├── config.ts              # ~/.secureci/config.yml defaults
 ├── report.ts              # --format text/json/sarif rendering
 ├── inventory.ts           # Action inventory + lockfile drift
+├── advisories.ts          # GitHub Advisory Database lookups, version ranges, cache
 ├── init.ts                # `secureci init workflow` generator
 ├── index.ts               # Library exports
 ├── parser/

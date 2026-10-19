@@ -30,6 +30,15 @@ import {
 } from './report';
 import { renderInitWorkflow } from './init';
 import {
+  AdvisoryChecker,
+  AdvisoryReport,
+  checkFileAdvisories,
+  describeReport,
+  FailOn,
+  mergeReports,
+  targetsFromInventory
+} from './advisories';
+import {
   addTransitive,
   buildInventory,
   diffLock,
@@ -275,6 +284,10 @@ program
       .choices(['text', 'json', 'sarif'])
       .default('text')
   )
+  .option(
+    '--offline',
+    'Do not use the network: skip the security advisory lookup (cached advisories are still used), and read remote contracts and actions only from the cache'
+  )
   .action(
     async (
       files: string[],
@@ -282,6 +295,7 @@ program
         contract?: string;
         contractRecurse: ContractRecurse;
         format: ReportFormat;
+        offline?: boolean;
       }
     ) => {
       files.forEach(requireFile);
@@ -289,7 +303,8 @@ program
         files,
         options.contract,
         options.contractRecurse,
-        options.format
+        options.format,
+        options.offline ?? false
       );
     }
   );
@@ -305,7 +320,7 @@ program
   )
   .option(
     '--offline',
-    'Do not resolve tags to commit SHAs over the network (already-pinned refs still resolve)'
+    'Do not resolve tags to commit SHAs or query security advisories over the network (already-pinned refs still resolve; cached advisories are used)'
   )
   .option(
     '--dry-run',
@@ -551,6 +566,24 @@ async function runInventory(
     );
     if (identity && action.resolvedSha) Object.assign(action, identity);
   }
+
+  // 4. Known security advisories for every action, direct and transitive.
+  const repoCount = new Set(
+    actions.map((a) => `${a.owner}/${a.repo}`.toLowerCase())
+  ).size;
+  const advising = new Progress(
+    'Checking security advisories',
+    online ? repoCount : 0
+  );
+  const advisoryReport: AdvisoryReport = await new AdvisoryChecker({
+    offline: !online,
+    onLookup: (repo) => {
+      if (online) advising.tick(repo);
+    }
+  }).check(targetsFromInventory(actions));
+  advising.done(
+    `Checked security advisories for ${repoCount} repositor${repoCount === 1 ? 'y' : 'ies'}`
+  );
   logger.setLevel(level);
 
   const current: Record<string, LockEntry> = {};
@@ -567,8 +600,28 @@ async function runInventory(
   // --dry-run: print the resolved inventory as JSON, touching nothing.
   if (options.dryRun) {
     // eslint-disable-next-line no-console
-    console.log(JSON.stringify({ actions }, null, 2));
+    console.log(
+      JSON.stringify(
+        {
+          actions,
+          advisories: advisoryReport.findings,
+          advisoryUnknownVersions: advisoryReport.unknownVersions
+        },
+        null,
+        2
+      )
+    );
+    // The findings are in the JSON; say on stderr what wasn't checked.
+    describeReport(advisoryReport)
+      .filter((line) => line.kind === 'note' && line.level === 'warn')
+      .forEach((line) => logger.warn(line.text));
     return;
+  }
+
+  // Advisories are reported, but don't change the exit code here: gate on
+  // them with `secureci validate` (rule secureci/vulnerable-action).
+  for (const line of describeReport(advisoryReport)) {
+    logger[line.level](line.text);
   }
 
   // Used references that couldn't be resolved to a commit now.
@@ -670,7 +723,9 @@ async function validateOneFile(
   filePath: string,
   contractFile: string | undefined,
   recurse: ContractRecurse,
-  say: (fn: () => void) => void
+  say: (fn: () => void) => void,
+  advisories: { checker: AdvisoryChecker; reports: AdvisoryReport[] },
+  offline: boolean
 ): Promise<ValidationResult> {
   const parsed = parseFile(filePath);
   let result: ValidationResult;
@@ -683,6 +738,7 @@ async function validateOneFile(
     say(() => logger.info(`Validating action: ${filePath}`));
   }
 
+  let failOn: FailOn | undefined;
   if (contractFile) {
     say(() =>
       logger.info(`Validating against pipeline contract: ${contractFile}`)
@@ -702,8 +758,10 @@ async function validateOneFile(
       };
     } else {
       const spec = parsePipelineContract(contractFile);
+      failOn = spec.advisories?.failOn;
       const contractResult = await validatePipelineContract(parsed, spec, {
-        recurse
+        recurse,
+        offline
       });
       result = {
         valid: result.valid && contractResult.valid,
@@ -711,14 +769,26 @@ async function validateOneFile(
       };
     }
   }
-  return result;
+
+  // Known security advisories for the file's own uses: references.
+  const { errors, report } = await checkFileAdvisories(
+    parsed,
+    advisories.checker,
+    failOn
+  );
+  advisories.reports.push(report);
+  return {
+    valid: result.valid && errors.every((e) => e.severity !== 'error'),
+    errors: [...result.errors, ...errors]
+  };
 }
 
 async function validateFiles(
   files: string[],
-  contractFile?: string,
-  recurse: ContractRecurse = 'local',
-  format: ReportFormat = 'text'
+  contractFile: string | undefined,
+  recurse: ContractRecurse,
+  format: ReportFormat,
+  offline: boolean
 ): Promise<void> {
   // Only text mode narrates; json/sarif write nothing but the report to
   // stdout, so the output is pipeable.
@@ -735,8 +805,9 @@ async function validateFiles(
   if (contractFile) {
     try {
       const source = await resolveContractSource(contractFile, {
-        fetchFile: (uses) => fetchRepoFile(uses),
-        resolveSha: (uses) => resolveActionSha(uses),
+        fetchFile: (uses) => fetchRepoFile(uses, { offline }),
+        resolveSha: async (uses) =>
+          offline ? undefined : resolveActionSha(uses),
         warn: (message) => logger.warn(message)
       });
       contractPath = source.file;
@@ -761,6 +832,11 @@ async function validateFiles(
     }
   }
 
+  // One lookup per repository across all files (and a 24h disk cache).
+  const advisories = {
+    checker: new AdvisoryChecker({ offline }),
+    reports: [] as AdvisoryReport[]
+  };
   const entries: ReportEntry[] = [];
   for (const filePath of files) {
     try {
@@ -769,7 +845,9 @@ async function validateFiles(
         filePath,
         contractPath,
         recurse,
-        say
+        say,
+        advisories,
+        offline
       );
       entries.push({ file: filePath, result });
     } catch (error) {
@@ -790,6 +868,14 @@ async function validateFiles(
   }
 
   const allValid = entries.every((e) => e.result.valid);
+
+  // What couldn't be checked, once for all files: warnings on stderr, and
+  // (text mode only) unknown versions as info. Findings are in the results.
+  for (const line of describeReport(mergeReports(advisories.reports))) {
+    if (line.kind !== 'note') continue;
+    if (line.level === 'warn') logger.warn(line.text);
+    else say(() => logger.info(line.text));
+  }
 
   if (quiet) {
     // eslint-disable-next-line no-console
