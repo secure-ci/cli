@@ -127,6 +127,26 @@ export function parsePipelineContract(filePath: string): PipelineContractSpec {
   if (spec.permissions !== undefined) {
     result.permissions = parsePermissionsPolicy(spec.permissions);
   }
+  if (spec.advisories !== undefined) {
+    if (
+      typeof spec.advisories !== 'object' ||
+      spec.advisories === null ||
+      Array.isArray(spec.advisories)
+    ) {
+      throw new Error('Contract "advisories" must be a mapping');
+    }
+    const advisories = spec.advisories as Record<string, unknown>;
+    result.advisories = {};
+    if (advisories['fail-on'] !== undefined) {
+      const level = String(advisories['fail-on']).toLowerCase();
+      if (!(FAIL_ON_LEVELS as readonly string[]).includes(level)) {
+        throw new Error(
+          `Contract "advisories.fail-on" must be one of ${FAIL_ON_LEVELS.join(', ')}, got "${String(advisories['fail-on'])}"`
+        );
+      }
+      result.advisories.failOn = level as FailOn;
+    }
+  }
   if (spec['allowed-owners'] !== undefined) {
     result.allowedOwners = parseStringList(
       spec['allowed-owners'],

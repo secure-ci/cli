@@ -29,6 +29,7 @@ src/
 ├── inventory.ts           # Action inventory + lockfile drift
 ├── advisories.ts          # GitHub Advisory Database lookups, version ranges, cache
 ├── pin.ts                 # `secureci pin`: rewrite uses: tags to commit SHAs in place
+├── advisories.ts          # GitHub Advisory Database lookups, version ranges, cache
 ├── init.ts                # `secureci init workflow` generator
 ├── index.ts               # Library exports
 ├── parser/

@@ -182,6 +182,13 @@ export interface PipelineContractSpec {
   };
   /** GITHUB_TOKEN permissions policy. */
   permissions?: PermissionsPolicy;
+  /**
+   * Known security advisories (`secureci/vulnerable-action`): findings at
+   * or above `failOn` are errors, the rest warnings. Default: high.
+   */
+  advisories?: {
+    failOn?: 'critical' | 'high' | 'medium' | 'low';
+  };
 }
 
 /** Contract `permissions:` policy; violations are errors. */
@@ -231,6 +238,11 @@ export interface RunOptions {
   inputs?: Record<string, string>;
   secrets?: Record<string, string>;
   job?: string;
+  /**
+   * `--matrix key:value` filters: run only the matrix combinations whose
+   * value (as text) for each key is one of the given ones.
+   */
+  matrix?: Record<string, string[]>;
   verbose?: boolean;
   /** Container runtime to use for isolating `run:` steps. Default: 'docker'. */
   containerRuntime?: 'auto' | 'docker' | 'podman' | 'containerd' | 'host';
