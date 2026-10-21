@@ -7,6 +7,7 @@ import {
   clearActionCache,
   fetchAction,
   fetchRepoFile,
+  cachedActionSha,
   getActionCacheDir,
   githubToken,
   repoExists,
@@ -15,7 +16,11 @@ import {
 } from './runner/action-fetcher';
 import { Progress } from './utils/progress';
 import { resolveContractSource } from './contract-source';
-import { validateWorkflow, validateAction } from './parser/validator';
+import {
+  mergeValidationResults,
+  validateWorkflow,
+  validateAction
+} from './parser/validator';
 import { parseFile } from './parser/workflow-parser';
 import { parsePipelineContract } from './parser/pipeline-contract-parser';
 import {
@@ -29,6 +34,7 @@ import {
   ReportFormat
 } from './report';
 import { renderInitWorkflow } from './init';
+import { localPinTargets, pinContent } from './pin';
 import {
   AdvisoryChecker,
   AdvisoryReport,
@@ -54,7 +60,7 @@ import {
 } from './github-lockfile';
 import type { ValidationResult } from './types';
 import { logger, LogLevel } from './utils/logger';
-import { parseKeyValuePairs } from './utils/key-value';
+import { loadKeyValues } from './utils/env-file';
 import {
   loadConfig,
   saveConfig,
@@ -146,6 +152,22 @@ program
     'Set a configuration variable for the vars context. Repeatable'
   )
   .option(
+    '--env-file <file...>',
+    'Read --env values from a .env-style file. Repeatable; later files win, --env wins over files. Config: env-file'
+  )
+  .option(
+    '--secret-file <file...>',
+    'Read --secret values from a .env-style file; every value is masked. Repeatable; later files win, --secret wins over files. Config: secret-file'
+  )
+  .option(
+    '--input-file <file...>',
+    'Read --input values from a .env-style file. Repeatable; later files win, --input wins over files. Config: input-file'
+  )
+  .option(
+    '--var-file <file...>',
+    'Read --var values from a .env-style file. Repeatable; later files win, --var wins over files. Config: var-file'
+  )
+  .option(
     '--event-path <file>',
     'Read the event payload (github.event, $GITHUB_EVENT_PATH) from a JSON file'
   )
@@ -211,13 +233,35 @@ program
     );
 
     try {
-      const inputs = parseKeyValuePairs(options.input, '--input');
-      const secrets = parseKeyValuePairs(options.secret, '--secret', {
-        redact: true,
+      const inputs = loadKeyValues({
+        flagName: '--input',
+        fileFlagName: '--input-file',
+        pairs: options.input,
+        files: options.inputFile,
+        configFiles: globalConfig['input-file']
+      });
+      const secrets = loadKeyValues({
+        flagName: '--secret',
+        fileFlagName: '--secret-file',
+        pairs: options.secret,
+        files: options.secretFile,
+        configFiles: globalConfig['secret-file'],
+        secret: true,
         fromEnv: process.env
       });
-      const vars = parseKeyValuePairs(options.var, '--var');
-      const env = parseKeyValuePairs(options.env, '--env', {
+      const vars = loadKeyValues({
+        flagName: '--var',
+        fileFlagName: '--var-file',
+        pairs: options.var,
+        files: options.varFile,
+        configFiles: globalConfig['var-file']
+      });
+      const env = loadKeyValues({
+        flagName: '--env',
+        fileFlagName: '--env-file',
+        pairs: options.env,
+        files: options.envFile,
+        configFiles: globalConfig['env-file'],
         fromEnv: process.env
       });
 
@@ -338,6 +382,35 @@ program
   .option('--compare', `Alias of --check`)
   .action(async (files: string[], options) => {
     await runInventory(files, options);
+  });
+
+program
+  .command('pin')
+  .description(
+    'Pin action and reusable-workflow tags to commit SHAs in place (`owner/repo@<sha> # v4`), keeping formatting and comments'
+  )
+  .argument(
+    '[file...]',
+    'Workflow or action files (default: every file in .github/workflows, plus the local actions and reusable workflows they use)'
+  )
+  .option(
+    '--check',
+    'Change nothing; exit non-zero if any reference would be pinned or cannot be resolved (for CI)'
+  )
+  .option(
+    '-c, --contract <file>',
+    "Leave the owners/actions in this pipeline contract's pins.allow on their tags"
+  )
+  .option(
+    '--offline',
+    'Do not use the network: only refs already in the action cache resolve; others are reported, not changed'
+  )
+  .option(
+    '--update-lock',
+    `Afterwards, write ./${LOCKFILE_NAME} from the pinned workflows (as \`inventory --update-lock\`)`
+  )
+  .action(async (files: string[], options) => {
+    await runPin(files, options);
   });
 
 program
@@ -719,6 +792,151 @@ async function runInventory(
   logger.success(`No action drift against ${lockName}.`);
 }
 
+async function runPin(
+  files: string[],
+  options: {
+    check?: boolean;
+    contract?: string;
+    offline?: boolean;
+    updateLock?: boolean;
+  }
+): Promise<void> {
+  if (options.check && options.updateLock) {
+    logger.error('Use either --update-lock or --check, not both.');
+    process.exit(1);
+  }
+  const given = files.length > 0 ? files : defaultWorkflowFiles();
+  if (given.length === 0) {
+    logger.error('No workflow files given and none found in .github/workflows');
+    process.exit(1);
+  }
+  given.forEach(requireFile);
+  // Explicit files are pinned as given; the default run covers the whole
+  // repository, including local actions the workflows use.
+  const targets = files.length > 0 ? given : localPinTargets(given);
+
+  let allow: string[] = [];
+  if (options.contract) {
+    try {
+      const source = await resolveContractSource(options.contract, {
+        fetchFile: (uses) => fetchRepoFile(uses, { offline: options.offline }),
+        resolveSha: (uses) =>
+          options.offline
+            ? Promise.resolve(cachedActionSha(uses))
+            : resolveActionSha(uses),
+        warn: (message) => logger.warn(message)
+      });
+      allow = parsePipelineContract(source.file).pins?.allow ?? [];
+    } catch (error) {
+      logger.error(
+        `Could not read contract ${options.contract}: ${error instanceof Error ? error.message : 'Unknown error'}`
+      );
+      process.exit(1);
+    }
+  }
+
+  // Each distinct reference is resolved once, across all files.
+  const resolving = new Progress('Resolving tags', 0);
+  const resolved = new Map<string, Promise<string | undefined>>();
+  const resolve = (uses: string): Promise<string | undefined> => {
+    let sha = resolved.get(uses);
+    if (!sha) {
+      if (options.offline) {
+        sha = Promise.resolve(cachedActionSha(uses));
+      } else {
+        resolving.grow();
+        resolving.tick(uses);
+        sha = resolveActionSha(uses);
+      }
+      resolved.set(uses, sha);
+    }
+    return sha;
+  };
+
+  const display = (file: string) =>
+    path.relative(process.cwd(), path.resolve(file)) || file;
+  let changes = 0;
+  let changedFiles = 0;
+  let unresolved = 0;
+  let unreadable = false;
+  const report = options.check
+    ? (m: string) => logger.error(m)
+    : (m: string) => logger.warn(m);
+  for (const file of targets) {
+    const name = display(file);
+    let result;
+    try {
+      result = await pinContent(fs.readFileSync(file, 'utf-8'), resolve, {
+        allow
+      });
+    } catch (error) {
+      logger.error(
+        `Could not read ${name}: ${error instanceof Error ? error.message : 'Unknown error'}`
+      );
+      unreadable = true;
+      continue;
+    }
+    for (const a of result.allowed) {
+      logger.info(`${name}:${a.line} ${a.uses} left on its tag (pins.allow)`);
+    }
+    for (const c of result.changes) {
+      logger.info(
+        `${name}:${c.line} ${c.uses} -> ${c.sha.slice(0, 12)} (${c.ref})`
+      );
+    }
+    for (const u of result.unresolved) {
+      report(
+        `${name}:${u.line} ${u.uses} ${u.reason}` +
+          (options.offline && u.reason.startsWith('could not')
+            ? ' (offline: only refs in the action cache resolve)'
+            : '') +
+          '; left unchanged'
+      );
+    }
+    changes += result.changes.length;
+    unresolved += result.unresolved.length;
+    if (result.changes.length > 0) {
+      changedFiles++;
+      if (!options.check) fs.writeFileSync(file, result.content);
+    }
+  }
+  resolving.done(`Resolved ${resolved.size} reference(s)`);
+
+  const fileCount = `${changedFiles} file(s)`;
+  const unresolvedHint = options.offline
+    ? ''
+    : ` (check that each repository and ref exists${githubToken() ? '' : '; set GITHUB_TOKEN for private repositories'})`;
+  if (options.check) {
+    if (changes > 0) {
+      logger.error(
+        `${changes} reference(s) would be pinned in ${fileCount}. Run \`secureci pin\` to pin them.`
+      );
+    }
+    if (unresolved > 0) {
+      logger.error(
+        `${unresolved} reference(s) could not be resolved${unresolvedHint}.`
+      );
+    }
+    if (changes > 0 || unresolved > 0 || unreadable) process.exit(1);
+    logger.success('Nothing to pin: every remote reference is pinned.');
+    return;
+  }
+  if (changes > 0) {
+    logger.success(`Pinned ${changes} reference(s) in ${fileCount}.`);
+  } else if (unresolved === 0) {
+    logger.success('Nothing to pin: every remote reference is pinned.');
+  }
+  if (unresolved > 0) {
+    logger.warn(
+      `${unresolved} reference(s) could not be resolved and were left unchanged${unresolvedHint}.`
+    );
+  }
+  if (unreadable) process.exit(1);
+  if (options.updateLock) {
+    await runInventory(files, { offline: options.offline, updateLock: true });
+  }
+}
+
 async function validateOneFile(
   filePath: string,
   contractFile: string | undefined,
@@ -763,10 +981,7 @@ async function validateOneFile(
         recurse,
         offline
       });
-      result = {
-        valid: result.valid && contractResult.valid,
-        errors: [...result.errors, ...contractResult.errors]
-      };
+      result = mergeValidationResults(result, contractResult);
     }
   }
 

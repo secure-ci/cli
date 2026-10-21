@@ -6,11 +6,6 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 
-// `validate` and `inventory` query the GitHub Advisory Database (#47).
-// Point the API at a closed local port so no test reaches the real one
-// unless it sets GITHUB_API_URL itself.
-process.env.GITHUB_API_URL = 'http://127.0.0.1:9';
-
 // Black-box integration tests: invoke the built CLI binary as a subprocess,
 // since cli.ts calls `program.parse()`/`process.exit()` at module scope and
 // isn't structured for in-process unit testing (see vitest.config.mts, which
@@ -134,6 +129,28 @@ describe('secureci validate --contract', () => {
 
     expect(result.status).toBe(1);
     expect(result.stderr).toContain('Forbidden action "org/security-scan"');
+  });
+
+  it('turns the permissions warning into a single contract error (#45)', () => {
+    const contract = write(
+      'permissions-contract.yml',
+      'permissions:\n  required: true\n'
+    );
+
+    const result = run([
+      'validate',
+      workflow,
+      '--contract',
+      contract,
+      '--format',
+      'json'
+    ]);
+
+    expect(result.status).toBe(1);
+    const report = JSON.parse(result.stdout);
+    expect(report.errors).toEqual([
+      expect.objectContaining({ path: 'permissions', severity: 'error' })
+    ]);
   });
 
   it('fails when --contract is used against an action file', () => {
@@ -265,7 +282,8 @@ describe('secureci commands', () => {
       'list',
       'init',
       'config',
-      'cache'
+      'cache',
+      'pin'
     ]) {
       expect(result.stdout).toMatch(new RegExp(`\\n\\s+${command}\\b`));
     }
@@ -362,6 +380,146 @@ describe('secureci commands', () => {
     expect(result.stdout + result.stderr).toContain('all values arrived');
   });
 
+  describe('--env-file, --secret-file, --input-file and --var-file', () => {
+    let dir: string;
+    let home: string;
+
+    function writeFile(name: string, content: string, mode = 0o600): string {
+      const file = path.join(dir, name);
+      fs.writeFileSync(file, content);
+      fs.chmodSync(file, mode);
+      return name;
+    }
+
+    beforeAll(() => {
+      dir = fs.mkdtempSync(path.join(os.tmpdir(), 'secureci-cli-files-'));
+      home = fs.mkdtempSync(path.join(os.tmpdir(), 'secureci-cli-home-'));
+      fs.writeFileSync(
+        path.join(dir, 'files.yml'),
+        [
+          'name: Files',
+          'on: workflow_dispatch',
+          'jobs:',
+          '  a:',
+          '    runs-on: ubuntu-latest',
+          '    steps:',
+          '      - run: |',
+          '          echo "E1=$E1 E2=$E2 E3=$E3"',
+          '          echo "I=${{ inputs.who }} V=${{ vars.colour }} V2=${{ vars.size }}"',
+          '          echo "S=${{ secrets.TOKEN }}"',
+          '          test "$ML" = "$(printf \'line one\\nline two\')" && echo multi-line ok',
+          '        env:',
+          '          ML: ${{ secrets.MULTI }}'
+        ].join('\n')
+      );
+    });
+
+    afterAll(() => {
+      fs.rmSync(dir, { recursive: true, force: true });
+      fs.rmSync(home, { recursive: true, force: true });
+    });
+
+    const runIn = (args: string[]): ReturnType<typeof run> =>
+      run(['run', 'files.yml', '--container-runtime', 'host', ...args], dir, {
+        ...process.env,
+        HOME: home
+      });
+
+    it('feeds file values to steps, files in order, flags on top, secrets masked', () => {
+      writeFile('a.env', 'export E1=a1\nE2="a2 # kept"\nE3=a3 # comment\n');
+      writeFile('b.env', 'E3=b3\r\n');
+      writeFile(
+        '.secrets',
+        'TOKEN="tok-from-file-123"\nMULTI="line one\nline two"\n'
+      );
+      writeFile('inputs.env', "who='file who'\n");
+      writeFile('vars.env', 'colour=blue\nsize=small\n');
+
+      const result = runIn([
+        '--env-file',
+        'a.env',
+        '--env-file',
+        'b.env',
+        '--env',
+        'E1=flag1',
+        '--secret-file',
+        '.secrets',
+        '--input-file',
+        'inputs.env',
+        '--var-file',
+        'vars.env',
+        '--var',
+        'size=large'
+      ]);
+      const out = result.stdout + result.stderr;
+      expect(result.status).toBe(0);
+      expect(out).toContain('E1=flag1 E2=a2 # kept E3=b3');
+      expect(out).toContain('I=file who V=blue V2=large');
+      expect(out).toContain('S=***');
+      expect(out).not.toContain('tok-from-file-123');
+      expect(out).toContain('multi-line ok');
+      expect(out).not.toMatch(/readable by other users/);
+    });
+
+    it('fails clearly on a missing file', () => {
+      const result = runIn(['--secret-file', 'missing.secrets']);
+      expect(result.status).not.toBe(0);
+      expect(result.stdout + result.stderr).toContain(
+        '--secret-file: file not found: missing.secrets'
+      );
+    });
+
+    it('reports an invalid line with file:line and without its value', () => {
+      writeFile('bad.secrets', 'GOOD=1\nsupersecretvalue\n');
+      const result = runIn(['--secret-file', 'bad.secrets']);
+      const out = result.stdout + result.stderr;
+      expect(result.status).not.toBe(0);
+      expect(out).toContain('bad.secrets:2: expected KEY=value');
+      expect(out).not.toContain('supersecretvalue');
+    });
+
+    it('warns when a secret file is readable by other users', () => {
+      writeFile('loose.secrets', 'TOKEN=loose-secret-value\n', 0o644);
+      // spawnSync: the warning goes to stderr, which run() drops on success.
+      const result = spawnSync(
+        'node',
+        [
+          cliPath,
+          'run',
+          'files.yml',
+          '--container-runtime',
+          'host',
+          '--secret-file',
+          'loose.secrets'
+        ],
+        { cwd: dir, encoding: 'utf-8', env: { ...process.env, HOME: home } }
+      );
+      const out = result.stdout + result.stderr;
+      expect(out).toContain('loose.secrets is readable by other users');
+      expect(out).not.toContain('loose-secret-value');
+    });
+
+    it('uses config defaults unless a file flag is given', () => {
+      writeFile('config.env', 'E1=from-config\n');
+      writeFile('flag.env', 'E1=from-flag\n');
+      const env = { ...process.env, HOME: home };
+      expect(
+        run(['config', 'set', 'env-file', 'config.env'], dir, env).status
+      ).toBe(0);
+      try {
+        expect(runIn([]).stdout).toContain('E1=from-config');
+        expect(runIn(['--env-file', 'flag.env']).stdout).toContain(
+          'E1=from-flag'
+        );
+      } finally {
+        run(['config', 'unset', 'env-file'], dir, env);
+      }
+      expect(run(['config', 'set', 'secret-file', ''], dir, env).status).toBe(
+        1
+      );
+    });
+  });
+
   it('dry-runs a workflow with secureci run --dry-run', () => {
     const result = run(
       ['run', '.github/workflows/ci.yml', '--dry-run'],
@@ -391,9 +549,23 @@ describe('secureci commands', () => {
     const json = run(['validate', good, '--format', 'json']);
     expect(json.status).toBe(0);
     const parsed = JSON.parse(json.stdout);
-    expect(parsed).toMatchObject({ valid: true, errors: [] });
+    // The workflow declares no permissions: a warning, which doesn't fail
+    // validation (#45).
+    expect(parsed).toMatchObject({
+      valid: true,
+      errors: [{ path: 'permissions', severity: 'warning' }]
+    });
     // Only the JSON object is printed, nothing else.
     expect(json.stdout.trim().startsWith('{')).toBe(true);
+
+    const goodSarif = run(['validate', good, '--format', 'sarif']);
+    expect(goodSarif.status).toBe(0);
+    expect(JSON.parse(goodSarif.stdout).runs[0].results).toEqual([
+      expect.objectContaining({
+        ruleId: 'secureci/permissions',
+        level: 'warning'
+      })
+    ]);
 
     const bad = path.join(tempDir, 'bad.yml');
     fs.writeFileSync(
@@ -872,6 +1044,327 @@ describe('secureci commands', () => {
     }
   });
 
+  it('pin rewrites tags to cached commit SHAs offline, honours pins.allow, and --check fails until everything is pinned', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'secureci-pin-cli-'));
+    const wfDir = path.join(dir, '.github', 'workflows');
+    const actionDir = path.join(dir, '.github', 'actions', 'local');
+    fs.mkdirSync(wfDir, { recursive: true });
+    fs.mkdirSync(actionDir, { recursive: true });
+    const wf = path.join(wfDir, 'ci.yml');
+    const original = [
+      'name: CI',
+      'on: push',
+      'jobs:',
+      '  a:',
+      '    runs-on: ubuntu-latest',
+      '    steps:',
+      '      # checkout first',
+      "      - uses: 'actions/checkout@v4' # v3",
+      '      - uses: org/scan@v1',
+      '      - uses: trusted/tool@v2',
+      '      - uses: ./.github/actions/local',
+      '      - uses: docker://alpine:3.20',
+      ''
+    ].join('\n');
+    fs.writeFileSync(wf, original);
+    const action = path.join(actionDir, 'action.yml');
+    fs.writeFileSync(
+      action,
+      [
+        'name: Local',
+        'description: wraps a tool',
+        'runs:',
+        '  using: composite',
+        '  steps:',
+        '    - uses: org/tool@v2',
+        ''
+      ].join('\n')
+    );
+    const contract = path.join(dir, 'contract.yml');
+    fs.writeFileSync(contract, 'pins:\n  required: true\n  allow: [trusted]\n');
+
+    // Seed the action cache, as an earlier `run`/`inventory` would have:
+    // actions/checkout@v4 and org/tool@v2 resolve offline; org/scan@v1
+    // doesn't.
+    const home = path.join(dir, 'home');
+    const checkout = 'c'.repeat(40);
+    const tool = 'd'.repeat(40);
+    for (const [repo, ref, sha] of [
+      ['actions/checkout', 'v4', checkout],
+      ['org/tool', 'v2', tool]
+    ]) {
+      const cache = path.join(home, '.secureci', 'actions-cache', repo);
+      fs.mkdirSync(path.join(cache, sha), { recursive: true });
+      fs.writeFileSync(
+        path.join(cache, 'refs.json'),
+        JSON.stringify({ [ref]: sha })
+      );
+    }
+    const env = { ...process.env, HOME: home };
+    const pin = (...args: string[]) => {
+      const r = run(['pin', ...args], dir, env);
+      return { status: r.status, out: r.stdout + r.stderr };
+    };
+
+    try {
+      // --check changes nothing, lists what would change and fails.
+      const check = pin('--offline', '--check', '--contract', contract);
+      expect(check.status).not.toBe(0);
+      expect(check.out).toContain(
+        `.github/workflows/ci.yml:8 actions/checkout@v4 -> ${checkout.slice(0, 12)} (v4)`
+      );
+      expect(check.out).toContain(
+        `.github/actions/local/action.yml:6 org/tool@v2 -> ${tool.slice(0, 12)} (v2)`
+      );
+      expect(check.out).toMatch(/ci\.yml:9 org\/scan@v1 could not be resolved/);
+      expect(check.out).toContain('2 reference(s) would be pinned');
+      expect(fs.readFileSync(wf, 'utf-8')).toBe(original);
+
+      // Pinning rewrites only the resolvable references, in place.
+      const pinned = pin('--offline', '--contract', contract);
+      expect(pinned.out).toContain('Pinned 2 reference(s) in 2 file(s)');
+      expect(fs.readFileSync(wf, 'utf-8')).toBe(
+        original.replace(
+          "'actions/checkout@v4' # v3",
+          `'actions/checkout@${checkout}' # v4`
+        )
+      );
+      expect(fs.readFileSync(action, 'utf-8')).toContain(
+        `    - uses: org/tool@${tool} # v2\n`
+      );
+
+      // org/scan@v1 still can't be resolved, so --check still fails.
+      expect(
+        pin('--offline', '--check', '--contract', contract).status
+      ).not.toBe(0);
+      // Without the contract, trusted/tool@v2 must be pinned too.
+      fs.writeFileSync(
+        wf,
+        fs
+          .readFileSync(wf, 'utf-8')
+          .replace('org/scan@v1', `org/scan@${'e'.repeat(40)}`)
+      );
+      const noContract = pin(
+        '.github/workflows/ci.yml',
+        '--offline',
+        '--check'
+      );
+      expect(noContract.status).not.toBe(0);
+      expect(noContract.out).toContain('trusted/tool@v2 could not be resolved');
+      const clean = pin(
+        '.github/workflows/ci.yml',
+        '--offline',
+        '--check',
+        '--contract',
+        contract
+      );
+      expect(clean.status).toBe(0);
+      expect(clean.out).toContain('Nothing to pin');
+
+      // --update-lock refreshes secureci.lock from the pinned workflows.
+      expect(pin('--offline', '--update-lock', '--check').status).not.toBe(0);
+      expect(
+        pin('--offline', '--update-lock', '--contract', contract).status
+      ).toBe(0);
+      const lock = JSON.parse(
+        fs.readFileSync(path.join(dir, 'secureci.lock'), 'utf-8')
+      );
+      expect(Object.keys(lock.actions)).toContain(
+        `actions/checkout@${checkout}`
+      );
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('pin resolves tags over the network (here a fake GitHub API)', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'secureci-pin-net-'));
+    const wfDir = path.join(dir, '.github', 'workflows');
+    fs.mkdirSync(wfDir, { recursive: true });
+    const wf = path.join(wfDir, 'ci.yml');
+    fs.writeFileSync(
+      wf,
+      [
+        'on: push',
+        'jobs:',
+        '  call:',
+        '    uses: org/workflows/.github/workflows/build.yml@v1',
+        ''
+      ].join('\n')
+    );
+    const sha = 'f'.repeat(40);
+    const server = http.createServer((req, res) => {
+      if (req.url === '/api/repos/org/workflows/commits/v1') {
+        res.writeHead(200);
+        res.end(sha);
+        return;
+      }
+      res.writeHead(404);
+      res.end();
+    });
+    await new Promise<void>((resolve) =>
+      server.listen(0, '127.0.0.1', resolve)
+    );
+    const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    const env = {
+      ...process.env,
+      HOME: path.join(dir, 'home'),
+      GITHUB_SERVER_URL: base,
+      GITHUB_API_URL: `${base}/api`,
+      GITHUB_TOKEN: 'test-token',
+      no_proxy: '127.0.0.1,localhost',
+      NO_PROXY: '127.0.0.1,localhost'
+    };
+    try {
+      const result = await new Promise<{ status: number; out: string }>(
+        (resolve) =>
+          execFile(
+            'node',
+            [cliPath, 'pin'],
+            { cwd: dir, env, encoding: 'utf-8' },
+            (error, stdout, stderr) =>
+              resolve({
+                status: error ? ((error as { code?: number }).code ?? 1) : 0,
+                out: stdout + stderr
+              })
+          )
+      );
+      expect(result.status).toBe(0);
+      expect(fs.readFileSync(wf, 'utf-8')).toContain(
+        `    uses: org/workflows/.github/workflows/build.yml@${sha} # v1\n`
+      );
+    } finally {
+      server.closeAllConnections();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('validate --contract reads owner/repo/path@sha from another repository', () => {
+    const dir = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'secureci-remote-contract-')
+    );
+    const sha = 'c'.repeat(40);
+    // Seed the action cache the fetcher reads for a SHA-pinned ref, under a
+    // temporary HOME, so no network is needed.
+    const home = path.join(dir, 'home');
+    const cached = path.join(
+      home,
+      '.secureci',
+      'actions-cache',
+      'my-org',
+      'standards',
+      sha,
+      'contracts'
+    );
+    fs.mkdirSync(cached, { recursive: true });
+    fs.writeFileSync(
+      path.join(cached, 'standard.yml'),
+      'required:\n  - uses: org/security-scan\n'
+    );
+    const wf = path.join(dir, 'ci.yml');
+    fs.writeFileSync(
+      wf,
+      [
+        'name: CI',
+        'on: push',
+        'jobs:',
+        '  a:',
+        '    runs-on: ubuntu-latest',
+        '    steps:',
+        '      - uses: org/deploy@v1'
+      ].join('\n')
+    );
+    const env = { ...process.env, HOME: home, GITHUB_TOKEN: '', GH_TOKEN: '' };
+    const uses = `my-org/standards/contracts/standard.yml@${sha}`;
+
+    const res = run(
+      ['validate', wf, '--contract', uses, '--format', 'json'],
+      dir,
+      env
+    );
+    // The remote contract is enforced: the required scan is missing.
+    expect(res.status).not.toBe(0);
+    const report = JSON.parse(res.stdout);
+    expect(JSON.stringify(report.errors)).toContain('org/security-scan');
+    // ...and the report records exactly which contract version was used.
+    expect(report.contract).toEqual({
+      source: uses,
+      ref: sha,
+      commit: sha,
+      pinned: true
+    });
+    // A pinned ref doesn't warn.
+    expect(res.stderr).not.toContain('moving ref');
+
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('shows effective values, marking built-in defaults, in config list', () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'secureci-cfg-home-'));
+    const env = { ...process.env, HOME: home };
+    run(['config', 'set', 'container-memory', '512m'], tempDir, env);
+    const out = run(['config', 'list'], tempDir, env).stdout;
+    expect(out).toContain('container-runtime=docker (default)');
+    expect(out).toContain('container-memory=512m');
+    expect(out).toContain('container-image=(unset)');
+    fs.rmSync(home, { recursive: true, force: true });
+  });
+
+  it('uses consistent, capitalised help text', () => {
+    const help = run(['--help']).stdout + run(['run', '--help']).stdout;
+    expect(help).not.toMatch(
+      /display help for command|output the version number/
+    );
+    expect(help).toContain('Show help');
+  });
+
+  it('lists workflows with secureci list', () => {
+    const result = run(['list'], tempDir);
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain('ci.yml: Hello CI');
+  });
+
+  it('generates a valid workflow with secureci init workflow and refuses to clobber it', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'secureci-init-'));
+    const out = path.join(dir, '.github', 'workflows', 'secureci.yml');
+
+    // Bare `init` is ambiguous, so it shows help (listing the workflow
+    // subcommand) and writes nothing.
+    const bare = run(['init'], dir);
+    expect(bare.stdout + bare.stderr).toContain('workflow');
+    expect(fs.existsSync(out)).toBe(false);
+
+    const first = run(['init', 'workflow'], dir);
+    expect(first.status).toBe(0);
+    expect(fs.existsSync(out)).toBe(true);
+    // The action ref is this CLI's own release tag (package.json version).
+    const { version } = JSON.parse(
+      fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf-8')
+    );
+    expect(fs.readFileSync(out, 'utf-8')).toContain(
+      `uses: secure-ci/cli@v${version}\n`
+    );
+
+    // The generated workflow passes our own validator.
+    expect(run(['validate', out], dir).status).toBe(0);
+
+    // A second run won't overwrite without --force.
+    const second = run(['init', 'workflow'], dir);
+    expect(second.status).not.toBe(0);
+    expect(second.stderr).toContain('already exists');
+
+    // --no-upload keeps contents: read only and the file still validates.
+    const forced = run(['init', 'workflow', '--no-upload', '--force'], dir);
+    expect(forced.status).toBe(0);
+    const content = fs.readFileSync(out, 'utf-8');
+    expect(content).not.toContain('security-events');
+    expect(content).toContain('upload-sarif: false');
+    expect(run(['validate', out], dir).status).toBe(0);
+
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
   it('validate and inventory flag actions with known security advisories (#47)', async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'secureci-adv-cli-'));
     const fixtures = path.join(root, 'test', 'fixtures', 'advisories');
@@ -883,6 +1376,7 @@ describe('secureci commands', () => {
       [
         'name: CI',
         'on: push',
+        'permissions: {}',
         'jobs:',
         '  a:',
         '    runs-on: ubuntu-latest',
@@ -897,6 +1391,7 @@ describe('secureci commands', () => {
       [
         'name: Pinned',
         'on: push',
+        'permissions: {}',
         'jobs:',
         '  a:',
         '    runs-on: ubuntu-latest',
@@ -1080,130 +1575,5 @@ describe('secureci commands', () => {
       await new Promise<void>((resolve) => server.close(() => resolve()));
       fs.rmSync(dir, { recursive: true, force: true });
     }
-  });
-
-  it('validate --contract reads owner/repo/path@sha from another repository', () => {
-    const dir = fs.mkdtempSync(
-      path.join(os.tmpdir(), 'secureci-remote-contract-')
-    );
-    const sha = 'c'.repeat(40);
-    // Seed the action cache the fetcher reads for a SHA-pinned ref, under a
-    // temporary HOME, so no network is needed.
-    const home = path.join(dir, 'home');
-    const cached = path.join(
-      home,
-      '.secureci',
-      'actions-cache',
-      'my-org',
-      'standards',
-      sha,
-      'contracts'
-    );
-    fs.mkdirSync(cached, { recursive: true });
-    fs.writeFileSync(
-      path.join(cached, 'standard.yml'),
-      'required:\n  - uses: org/security-scan\n'
-    );
-    const wf = path.join(dir, 'ci.yml');
-    fs.writeFileSync(
-      wf,
-      [
-        'name: CI',
-        'on: push',
-        'jobs:',
-        '  a:',
-        '    runs-on: ubuntu-latest',
-        '    steps:',
-        '      - uses: org/deploy@v1'
-      ].join('\n')
-    );
-    const env = { ...process.env, HOME: home, GITHUB_TOKEN: '', GH_TOKEN: '' };
-    const uses = `my-org/standards/contracts/standard.yml@${sha}`;
-
-    const res = run(
-      ['validate', wf, '--contract', uses, '--format', 'json'],
-      dir,
-      env
-    );
-    // The remote contract is enforced: the required scan is missing.
-    expect(res.status).not.toBe(0);
-    const report = JSON.parse(res.stdout);
-    expect(JSON.stringify(report.errors)).toContain('org/security-scan');
-    // ...and the report records exactly which contract version was used.
-    expect(report.contract).toEqual({
-      source: uses,
-      ref: sha,
-      commit: sha,
-      pinned: true
-    });
-    // A pinned ref doesn't warn.
-    expect(res.stderr).not.toContain('moving ref');
-
-    fs.rmSync(dir, { recursive: true, force: true });
-  });
-
-  it('shows effective values, marking built-in defaults, in config list', () => {
-    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'secureci-cfg-home-'));
-    const env = { ...process.env, HOME: home };
-    run(['config', 'set', 'container-memory', '512m'], tempDir, env);
-    const out = run(['config', 'list'], tempDir, env).stdout;
-    expect(out).toContain('container-runtime=docker (default)');
-    expect(out).toContain('container-memory=512m');
-    expect(out).toContain('container-image=(unset)');
-    fs.rmSync(home, { recursive: true, force: true });
-  });
-
-  it('uses consistent, capitalised help text', () => {
-    const help = run(['--help']).stdout + run(['run', '--help']).stdout;
-    expect(help).not.toMatch(
-      /display help for command|output the version number/
-    );
-    expect(help).toContain('Show help');
-  });
-
-  it('lists workflows with secureci list', () => {
-    const result = run(['list'], tempDir);
-    expect(result.status).toBe(0);
-    expect(result.stdout).toContain('ci.yml: Hello CI');
-  });
-
-  it('generates a valid workflow with secureci init workflow and refuses to clobber it', () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'secureci-init-'));
-    const out = path.join(dir, '.github', 'workflows', 'secureci.yml');
-
-    // Bare `init` is ambiguous, so it shows help (listing the workflow
-    // subcommand) and writes nothing.
-    const bare = run(['init'], dir);
-    expect(bare.stdout + bare.stderr).toContain('workflow');
-    expect(fs.existsSync(out)).toBe(false);
-
-    const first = run(['init', 'workflow'], dir);
-    expect(first.status).toBe(0);
-    expect(fs.existsSync(out)).toBe(true);
-    // The action ref is this CLI's own release tag (package.json version).
-    const { version } = JSON.parse(
-      fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf-8')
-    );
-    expect(fs.readFileSync(out, 'utf-8')).toContain(
-      `uses: secure-ci/cli@v${version}\n`
-    );
-
-    // The generated workflow passes our own validator.
-    expect(run(['validate', out], dir).status).toBe(0);
-
-    // A second run won't overwrite without --force.
-    const second = run(['init', 'workflow'], dir);
-    expect(second.status).not.toBe(0);
-    expect(second.stderr).toContain('already exists');
-
-    // --no-upload keeps contents: read only and the file still validates.
-    const forced = run(['init', 'workflow', '--no-upload', '--force'], dir);
-    expect(forced.status).toBe(0);
-    const content = fs.readFileSync(out, 'utf-8');
-    expect(content).not.toContain('security-events');
-    expect(content).toContain('upload-sarif: false');
-    expect(run(['validate', out], dir).status).toBe(0);
-
-    fs.rmSync(dir, { recursive: true, force: true });
   });
 });

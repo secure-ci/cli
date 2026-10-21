@@ -936,6 +936,41 @@ describe('validatePipelineContract', () => {
       }
     });
   });
+
+  describe('forbidden-triggers (#46)', () => {
+    const steps = [{ run: 'echo hi' }];
+
+    it('errors once per forbidden trigger the workflow uses', async () => {
+      const result = await validatePipelineContract(
+        {
+          type: 'workflow',
+          path: '/tmp/workflow.yml',
+          file: {
+            name: 'PR',
+            on: { pull_request_target: null, workflow_run: null },
+            jobs: { a: { 'runs-on': 'ubuntu-latest', steps } }
+          }
+        },
+        { forbiddenTriggers: ['pull_request_target', 'schedule'] }
+      );
+      expect(result.valid).toBe(false);
+      expect(result.errors).toEqual([
+        expect.objectContaining({
+          path: 'on.pull_request_target',
+          severity: 'error',
+          rule: 'secureci/contract'
+        })
+      ]);
+    });
+
+    it('passes when the workflow uses none of them', async () => {
+      const result = await validatePipelineContract(
+        workflow({ a: { 'runs-on': 'ubuntu-latest', steps } }),
+        { forbiddenTriggers: ['pull_request_target'] }
+      );
+      expect(result).toEqual({ valid: true, errors: [] });
+    });
+  });
 });
 
 describe('lockfile.required', () => {
@@ -1027,5 +1062,47 @@ describe('lockfile.required', () => {
     expect(errs).toHaveLength(1);
     expect(errs[0].path).toBe('lockfile');
     expect(errs[0].message).toMatch(/Could not read secureci.lock/);
+  });
+});
+
+describe('permissions policy (#45)', () => {
+  const steps = [{ run: 'echo ok' }];
+
+  it('reports contract permission violations as errors', async () => {
+    const result = await validatePipelineContract(
+      workflow({ build: { 'runs-on': 'x', steps } }),
+      { permissions: { required: true } },
+      { recurse: 'none' }
+    );
+    expect(result.valid).toBe(false);
+    expect(result.errors).toEqual([
+      expect.objectContaining({
+        path: 'permissions',
+        severity: 'error',
+        rule: 'secureci/permissions'
+      })
+    ]);
+  });
+
+  it('enforces the top-level ceiling', async () => {
+    const wf = workflow({ build: { 'runs-on': 'x', steps } });
+    wf.file.permissions = { contents: 'write' };
+    const result = await validatePipelineContract(
+      wf,
+      { permissions: { max: { contents: 'read' } } },
+      { recurse: 'none' }
+    );
+    expect(result.errors.map((e) => [e.path, e.severity])).toEqual([
+      ['permissions.contents', 'error']
+    ]);
+  });
+
+  it('adds no permission findings without a permissions policy', async () => {
+    const result = await validatePipelineContract(
+      workflow({ build: { 'runs-on': 'x', steps } }),
+      {},
+      { recurse: 'none' }
+    );
+    expect(result.errors).toEqual([]);
   });
 });

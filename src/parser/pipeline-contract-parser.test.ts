@@ -85,6 +85,23 @@ describe('parsePipelineContract', () => {
     ).toThrow(/must be a mapping with a string "uses" field/);
   });
 
+  it('parses forbidden-triggers', () => {
+    expect(
+      parsePipelineContract(
+        writeTemp('forbidden-triggers:\n  - pull_request_target\n')
+      )
+    ).toEqual({ forbiddenTriggers: ['pull_request_target'] });
+  });
+
+  it('throws when forbidden-triggers is not a list of strings', () => {
+    expect(() =>
+      parsePipelineContract(writeTemp('forbidden-triggers: workflow_run\n'))
+    ).toThrow(/"forbidden-triggers" must be a list of strings/);
+    expect(() =>
+      parsePipelineContract(writeTemp('forbidden-triggers:\n  - 1\n'))
+    ).toThrow(/"forbidden-triggers" must be a list of strings/);
+  });
+
   it('parses lockfile.required', () => {
     expect(
       parsePipelineContract(writeTemp('lockfile:\n  required: true\n'))
@@ -124,5 +141,96 @@ describe('parsePipelineContract', () => {
     ).toThrow(
       /"advisories.fail-on" must be one of critical, high, medium, low/
     );
+  });
+
+  describe('permissions (#45)', () => {
+    it('parses required and max', () => {
+      expect(
+        parsePipelineContract(
+          writeTemp(
+            [
+              'permissions:',
+              '  required: true',
+              '  max:',
+              '    contents: read',
+              '    id-token: write',
+              '    issues: none'
+            ].join('\n')
+          )
+        )
+      ).toEqual({
+        permissions: {
+          required: true,
+          max: { contents: 'read', 'id-token': 'write', issues: 'none' }
+        }
+      });
+    });
+
+    it('accepts an empty mapping and an empty max', () => {
+      expect(parsePipelineContract(writeTemp('permissions: {}\n'))).toEqual({
+        permissions: {}
+      });
+      expect(
+        parsePipelineContract(writeTemp('permissions:\n  max: {}\n'))
+      ).toEqual({ permissions: { max: {} } });
+    });
+
+    it('keeps the other contract keys working alongside it', () => {
+      expect(
+        parsePipelineContract(
+          writeTemp(
+            [
+              'pins:',
+              '  required: true',
+              '  allow: [actions]',
+              'allowed-owners: [actions]',
+              'lockfile:',
+              '  required: true',
+              'permissions:',
+              '  required: false',
+              'required:',
+              '  - uses: org/scan'
+            ].join('\n')
+          )
+        )
+      ).toEqual({
+        pins: { required: true, allow: ['actions'] },
+        allowedOwners: ['actions'],
+        lockfile: { required: true },
+        permissions: { required: false },
+        required: [{ uses: 'org/scan' }]
+      });
+    });
+
+    it.each([
+      ['permissions: true\n', /"permissions" must be a mapping/],
+      ['permissions: [a]\n', /"permissions" must be a mapping/],
+      [
+        'permissions:\n  requried: true\n',
+        /"permissions" has an unknown key "requried" \(expected "required" or "max"\)/
+      ],
+      [
+        'permissions:\n  required: yes-please\n',
+        /"permissions.required" must be true or false/
+      ],
+      [
+        'permissions:\n  max: read-all\n',
+        /"permissions.max" must be a mapping/
+      ],
+      [
+        'permissions:\n  max: [contents]\n',
+        /"permissions.max" must be a mapping/
+      ],
+      [
+        'permissions:\n  max:\n    content: read\n',
+        /"permissions.max" has an unknown scope "content"/
+      ],
+      [
+        'permissions:\n  max:\n    contents: admin\n',
+        /"permissions.max.contents" must be "read", "write" or "none", got "admin"/
+      ]
+    ])('rejects %j', (yaml, message) => {
+      expect(() => parsePipelineContract(writeTemp(yaml))).toThrow(message);
+    });
   });
 });

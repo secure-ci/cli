@@ -19,9 +19,11 @@ A single CLI that understands GitHub Actions the way the runner does:
 - **Run workflows locally** — jobs in `needs:` order, matrix builds, reusable
   workflows, composite / JavaScript / Docker actions, and the full
   `${{ }}` / `if:` expression language.
-- **Validate** workflow and action files, and **check them against a pipeline
-  contract** (required/forbidden actions, ordering, minimum versions,
-  SHA-pinning rules).
+- **Validate** workflow and action files, flag **template injection**
+  (untrusted `${{ }}` input expanded into `run:` scripts) and over-broad
+  `GITHUB_TOKEN` permissions, and **check them against a pipeline contract**
+  (required/forbidden actions, ordering, minimum versions, SHA-pinning and
+  permissions rules).
 - **Inventory** every action a workflow pulls in, resolve each tag to a commit
   SHA, and **catch supply-chain drift** when a tag quietly starts pointing
   somewhere new.
@@ -59,6 +61,9 @@ secureci init workflow
 # Lock the actions you use and catch supply-chain drift (commit secureci.lock)
 secureci inventory            # bootstraps secureci.lock, then drift-checks
 secureci inventory --check    # fail on drift (use in CI)
+
+# Pin action tags to commit SHAs in place (keeps `# v4` for Dependabot/Renovate)
+secureci pin
 ```
 
 ## Where it shines
@@ -72,7 +77,9 @@ secureci inventory --check    # fail on drift (use in CI)
 - **Supply-chain visibility** — [`secureci inventory`](DOCS.md#action-inventory-and-drift-secureci-inventory)
   with a committed lockfile turns a silently moved action tag into a failing
   check, including tags inside the actions you use, and catches a locked
-  repository that was deleted and re-created.
+  repository that was deleted and re-created, and
+  [`secureci pin`](DOCS.md#pin-actions-to-commit-shas-secureci-pin) rewrites
+  action tags to commit SHAs in place.
 - **Known vulnerabilities** — `inventory` and `validate` flag actions with
   published [security advisories](DOCS.md#known-security-advisories) (for
   example GHSA-mrrh-fwg8-r2c3 in `tj-actions/changed-files`), using the GitHub
@@ -114,6 +121,9 @@ secureci run .github/workflows/ci.yml --job build --input ref=main --var ENV=sta
 
 # Pass a secret by name (value read from your environment, not the command line)
 secureci run .github/workflows/deploy.yml --secret TOKEN
+
+# Read env vars, secrets, inputs and variables from .env-style files
+secureci run .github/workflows/deploy.yml --env-file .env --secret-file .secrets
 
 # Validate against a central pipeline contract, recursing into called workflows
 secureci validate .github/workflows/deploy.yml \
@@ -168,10 +178,10 @@ The exact scope of each is documented in
 - **No ambient environment or secrets.** On the host, steps get only a minimal
   allowlist plus the runner's `GITHUB_*`/`RUNNER_*` vars and the workflow's own
   `env:`; everything else is passed explicitly.
-- **Secret masking everywhere.** Values from `--secret` or `::add-mask::` are
-  redacted in all output, and in container mode never appear on the client
-  command line (passed via a `0600` env file). Prefer `--secret NAME` so the
-  value stays out of your shell history too.
+- **Secret masking everywhere.** Values from `--secret`, `--secret-file` or
+  `::add-mask::` are redacted in all output, and in container mode never appear
+  on the client command line (passed via a `0600` env file). Prefer
+  `--secret NAME` so the value stays out of your shell history too.
 - **Tokens are handled carefully** — sent only to the GitHub host in
   `GITHUB_SERVER_URL` / `GITHUB_API_URL` (github.com by default), never passed
   to actions, and masked in logs.
