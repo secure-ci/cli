@@ -1256,6 +1256,7 @@ describe('secureci commands', () => {
       [
         'name: CI',
         'on: push',
+        'permissions: {}',
         'jobs:',
         '  a:',
         '    runs-on: ubuntu-latest',
@@ -1270,6 +1271,7 @@ describe('secureci commands', () => {
       [
         'name: Pinned',
         'on: push',
+        'permissions: {}',
         'jobs:',
         '  a:',
         '    runs-on: ubuntu-latest',
