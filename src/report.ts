@@ -15,6 +15,8 @@ const RULES: Record<string, string> = {
   'secureci/validation': 'Workflow or action structure',
   'secureci/contract': 'Pipeline contract',
   'secureci/expression': 'Expression / if: condition',
+  'secureci/injection': 'Untrusted input in a shell or script',
+  'secureci/permissions': 'GITHUB_TOKEN permissions',
   'secureci/dangerous-trigger': 'Privileged trigger with untrusted code'
 };
 

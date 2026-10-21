@@ -15,6 +15,7 @@ import { forbiddenTriggerErrors } from './dangerous-triggers';
 import { repositoryRoot } from '../utils/repository';
 import { fetchAction, fetchRepoFile } from '../runner/action-fetcher';
 import { findLockfile, readLockfile } from '../github-lockfile';
+import { contractPermissionErrors } from './permissions';
 
 /**
  * Which composite actions / reusable workflows to look inside: none, local
@@ -245,6 +246,12 @@ export async function validatePipelineContract(
 
   if (spec.lockfile?.required) {
     errors.push(...checkLockfile(parsed, sequence.filter(isRemote)));
+  }
+
+  // The workflow file's own permissions; called workflows are validated as
+  // files of their own.
+  if (spec.permissions) {
+    errors.push(...contractPermissionErrors(parsed.file, spec.permissions));
   }
 
   // Only the workflow's own on: matters: a called reusable workflow runs
