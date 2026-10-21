@@ -123,8 +123,8 @@ describe('Validator', () => {
         } finally {
           fs.rmSync(dir, { recursive: true, force: true });
         }
-        });
       });
+    });
 
     describe('dangerous triggers (#46)', () => {
       function validate(lines: string[]) {
@@ -142,6 +142,7 @@ describe('Validator', () => {
         const result = validate([
           'name: PR',
           'on: pull_request_target',
+          'permissions: {}',
           'jobs:',
           '  build:',
           '    runs-on: ubuntu-latest',
@@ -167,6 +168,7 @@ describe('Validator', () => {
           'on:',
           '  pull_request_target:',
           '    types: [opened]',
+          'permissions: {}',
           'jobs:',
           '  label:',
           '    runs-on: ubuntu-latest',
