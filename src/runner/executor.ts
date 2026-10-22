@@ -33,8 +33,11 @@ import {
   matrixLabel,
   isTruthySetting,
   expandMatrix,
+  filterMatrix,
+  noMatrixMatchMessage,
   numberSetting,
-  topologicalJobOrder
+  topologicalJobOrder,
+  unknownMatrixKeys
 } from './job-plan';
 import {
   createRunDir,
@@ -142,7 +145,9 @@ async function executeReusableWorkflowJob(
       ...options,
       inputs,
       secrets,
-      job: undefined
+      // --job and --matrix select the caller's jobs, not the called ones.
+      job: undefined,
+      matrix: undefined
     },
     internal
   );
@@ -219,6 +224,9 @@ export async function executeWorkflow(
       const parallel = Math.max(1, Math.floor(options.parallel ?? 1));
       const concurrent = parallel > 1;
       const slots = internal.slots ?? new Slots(parallel);
+      const matrixFilter = options.matrix ?? {};
+      const definedMatrixKeys = new Set<string>();
+      let matrixUnmatched = false;
       const order = topologicalJobOrder(parsed.file.jobs).filter(
         // With --job, only that job runs; its dependencies count as done.
         (jobId) => !options.job || jobId === options.job
@@ -236,6 +244,20 @@ export async function executeWorkflow(
       const needsOf = (jobId: string): string[] => {
         const needs = parsed.file.jobs[jobId].needs;
         return needs ? (Array.isArray(needs) ? needs : [needs]) : [];
+      };
+      const selectCombinations = (
+        jobId: string,
+        combinations: Array<Record<string, unknown>>
+      ): Array<{ index: number; values: Record<string, unknown> }> => {
+        for (const combo of combinations) {
+          Object.keys(combo).forEach((key) => definedMatrixKeys.add(key));
+        }
+        const { keys, matches } = filterMatrix(combinations, matrixFilter);
+        if (keys.length > 0 && matches.length === 0) {
+          logger.warn(noMatrixMatchMessage(jobId, matrixFilter, combinations));
+          matrixUnmatched = true;
+        }
+        return matches;
       };
       // Each job's results, in matrix order; collected in `order` at the end
       // so the report doesn't depend on which job finished first.
@@ -311,6 +333,8 @@ export async function executeWorkflow(
             job.strategy?.matrix,
             jobIfCtx
           );
+          const selected = selectCombinations(jobId, matrixCombinations);
+          if (selected.length === 0) return { result: 'skipped', outputs: {} };
           const failFast = job.strategy?.['fail-fast'] !== false;
           const maxParallel = numberSetting(
             job.strategy?.['max-parallel'],
@@ -329,9 +353,11 @@ export async function executeWorkflow(
             // A reusable workflow call (once per matrix combination). The
             // call itself holds no slot: the called workflow's jobs do.
             outcomes = await runMatrix(
-              matrixCombinations.length,
+              selected.length,
               (index, signal) => {
-                const label = labelOf(matrixCombinations[index]);
+                const { index: combinationIndex, values: matrixValues } =
+                  selected[index];
+                const label = labelOf(matrixValues);
                 return tagged(
                   label,
                   async (): Promise<UnitOutcome> => {
@@ -340,14 +366,15 @@ export async function executeWorkflow(
                       job,
                       filePath,
                       options,
-                      { ...jobIfCtx, matrix: matrixCombinations[index] },
+                      { ...jobIfCtx, matrix: matrixValues },
                       { slots, signal }
                     );
                     const cancelled = !reusableResult.success && signal.aborted;
-                    unitResults[index] = cancelled
+                    unitResults[combinationIndex] = cancelled
                       ? { ...reusableResult, cancelled: true }
                       : reusableResult;
-                    unitOutputs[index] = reusableResult.outputs ?? {};
+                    unitOutputs[combinationIndex] =
+                      reusableResult.outputs ?? {};
                     return {
                       result: reusableResult.success
                         ? 'success'
@@ -704,18 +731,16 @@ export async function executeWorkflow(
             };
 
             outcomes = await runMatrix(
-              matrixCombinations.length,
-              (jobIndex, signal) =>
-                tagged(
-                  labelOf(matrixCombinations[jobIndex]),
-                  () =>
-                    runCombination(
-                      jobIndex,
-                      matrixCombinations[jobIndex],
-                      signal
-                    ),
+              selected.length,
+              (index, signal) => {
+                const { index: jobIndex, values: matrixValues } =
+                  selected[index];
+                return tagged(
+                  labelOf(matrixValues),
+                  () => runCombination(jobIndex, matrixValues, signal),
                   true
-                ),
+                );
+              },
               {
                 failFast,
                 maxParallel,
@@ -752,9 +777,16 @@ export async function executeWorkflow(
       const jobResults = await runJobGraph(order, needsOf, runJob, concurrent);
       const jobs = order.flatMap((jobId) => resultsByJob.get(jobId) ?? []);
 
+      for (const key of unknownMatrixKeys(matrixFilter, definedMatrixKeys)) {
+        logger.warn(
+          `--matrix ${key}: no matrix job defines this key; it was ignored`
+        );
+      }
+
       const callOutputs = workflowCallOutputs(parsed.file.on);
       return {
-        success: jobs.every((j) => j.success || j.continueOnError),
+        success:
+          !matrixUnmatched && jobs.every((j) => j.success || j.continueOnError),
         jobs,
         duration: Date.now() - startTime,
         ...(callOutputs

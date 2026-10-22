@@ -21,6 +21,15 @@ export interface CliConfig {
   'allow-network'?: boolean;
   /** Jobs running at once (`--parallel`). Default: the CPU count. */
   parallel?: number;
+  /**
+   * Default files for `run --env-file` etc., used when the flag isn't given.
+   * Relative paths resolve against the current directory. `config set`
+   * stores one path; a YAML list in the file is read in order.
+   */
+  'env-file'?: string | string[];
+  'secret-file'?: string | string[];
+  'input-file'?: string | string[];
+  'var-file'?: string | string[];
   /** `runs-on` label -> container image, over the built-in mapping. */
   'runner-images'?: Record<string, string>;
 }
@@ -102,7 +111,11 @@ export const CONFIG_KEYS = [
   'container-timeout',
   'container-memory',
   'allow-network',
-  'parallel'
+  'parallel',
+  'env-file',
+  'secret-file',
+  'input-file',
+  'var-file'
 ] as const;
 
 export type ConfigKey = (typeof CONFIG_KEYS)[number];
@@ -197,6 +210,14 @@ export function parseConfigValue(
       return parseParallel(rawValue);
     case 'container-image':
     case 'container-memory':
+      return rawValue;
+    case 'env-file':
+    case 'secret-file':
+    case 'input-file':
+    case 'var-file':
+      if (rawValue === '') {
+        throw new Error(`Invalid value "" for ${key}. Must be a file path.`);
+      }
       return rawValue;
   }
 }

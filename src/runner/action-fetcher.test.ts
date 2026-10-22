@@ -3,11 +3,15 @@ import {
   fetchAction,
   fetchRepoFile,
   lsRemoteSha,
+  lsRemoteTags,
+  parseLsRemoteTags,
   resolveActionSha,
   resolveRepoIdentity,
   repoExists,
   lsRemoteReachable,
-  clearActionCache
+  clearActionCache,
+  cachedActionSha,
+  getActionCacheDir
 } from './action-fetcher';
 import * as fs from 'fs';
 import * as http from 'http';
@@ -508,6 +512,34 @@ describe('Action Fetcher', () => {
     });
   });
 
+  describe('cachedActionSha', () => {
+    const SHA = 'a'.repeat(40);
+    function seed(refs: Record<string, string>, commits: string[]): void {
+      const dir = path.join(getActionCacheDir(), 'org', 'act');
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(path.join(dir, 'refs.json'), JSON.stringify(refs));
+      for (const sha of commits) fs.mkdirSync(path.join(dir, sha));
+    }
+
+    it('returns the cached commit for a tag, without any network', () => {
+      seed({ v1: SHA }, [SHA]);
+      expect(cachedActionSha('org/act@v1')).toBe(SHA);
+      expect(cachedActionSha('Org/Act/sub/dir@v1')).toBe(SHA);
+    });
+
+    it('is undefined for a ref that is not cached, or whose commit is gone', () => {
+      seed({ v1: SHA }, []);
+      expect(cachedActionSha('org/act@v1')).toBeUndefined();
+      expect(cachedActionSha('org/act@v2')).toBeUndefined();
+      expect(cachedActionSha('org/other@v1')).toBeUndefined();
+      expect(cachedActionSha('not-a-reference')).toBeUndefined();
+    });
+
+    it('returns an already-pinned SHA as is (lower-cased)', () => {
+      expect(cachedActionSha(`org/act@${'B'.repeat(40)}`)).toBe('b'.repeat(40));
+    });
+  });
+
   describe('lsRemoteReachable', () => {
     it('is true for a repository and false for a missing one', async () => {
       const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'secureci-reach-'));
@@ -557,9 +589,38 @@ describe('Action Fetcher', () => {
         expect(await lsRemoteSha(work, 'main')).toBe(head);
         expect(await lsRemoteSha(work, 'v1')).toBe(head);
         expect(await lsRemoteSha(work, 'nope')).toBeUndefined();
+        // Every tag, annotated ones peeled to their commit.
+        git('tag', 'v1.0.0');
+        expect(await lsRemoteTags(work)).toEqual(
+          new Map([
+            ['v1', head],
+            ['v1.0.0', head]
+          ])
+        );
+        expect(await lsRemoteTags(path.join(dir, 'missing'))).toBeUndefined();
       } finally {
         fs.rmSync(dir, { recursive: true, force: true });
       }
     });
+  });
+
+  it('parses ls-remote tag output, preferring peeled entries', () => {
+    const a = 'a'.repeat(40);
+    const b = 'B'.repeat(40);
+    const output = [
+      `${a}\trefs/tags/v2`,
+      `${b}\trefs/tags/v2^{}`,
+      `${a}\trefs/tags/v3^{}`,
+      `${b}\trefs/tags/v3`,
+      `${a}\trefs/heads/main`,
+      'garbage',
+      ''
+    ].join('\n');
+    expect(parseLsRemoteTags(output)).toEqual(
+      new Map([
+        ['v2', 'b'.repeat(40)],
+        ['v3', a]
+      ])
+    );
   });
 });

@@ -23,15 +23,20 @@ CLI (cli.ts)
 
 ```
 src/
-├── cli.ts                 # Entry point: commander commands (run, validate, inventory, init, list, config, cache)
+├── cli.ts                 # Entry point: commander commands (run, validate, inventory, pin, init, list, config, cache)
 ├── config.ts              # ~/.secureci/config.yml defaults
 ├── report.ts              # --format text/json/sarif rendering
 ├── inventory.ts           # Action inventory + lockfile drift
+├── pin.ts                 # `secureci pin`: rewrite uses: tags to commit SHAs in place
+├── advisories.ts          # GitHub Advisory Database lookups, version ranges, cache
 ├── init.ts                # `secureci init workflow` generator
 ├── index.ts               # Library exports
+├── version.ts             # --version: embedded at bundle time, else package.json
 ├── parser/
 │   ├── workflow-parser.ts            # Parse workflow AND action YAML (parseFile)
 │   ├── validator.ts                  # Syntax validation + expression checks
+│   ├── injection.ts                  # Template injection: untrusted ${{ }} in run:/github-script (recursive)
+│   ├── permissions.ts                # GITHUB_TOKEN permissions checks (default + contract policy)
 │   ├── pipeline-contract-parser.ts   # Parse --contract files
 │   └── pipeline-contract-validator.ts# Check a workflow against a contract (recursive)
 ├── runner/
@@ -45,6 +50,7 @@ src/
 │   ├── steps.ts           # run: steps (host or job container)
 │   ├── actions.ts         # uses: dispatch, composite actions, built-ins, job-start pre
 │   ├── node-action.ts     # JavaScript actions (pre/main/post)
+│   ├── node-binary.ts     # Which node runs JS actions on the host (SEA-aware)
 │   ├── docker-action.ts   # Docker actions and docker:// steps
 │   ├── checkout.ts        # actions/checkout from the local working copy
 │   ├── builtin-actions.ts # Local upload/download-artifact and cache
@@ -57,9 +63,26 @@ src/
 ├── utils/
 │   ├── logger.ts          # Logging with secret masking
 │   ├── key-value.ts       # --input/--secret/--env/--var parsing
+│   ├── env-file.ts        # --env-file/--secret-file/... parsing and precedence
 │   └── repository.ts      # Repository root for ./ references
 └── types/index.ts         # Shared TypeScript types
 ```
+
+## Standalone binary (`scripts/`)
+
+Release binaries are Node.js single executable applications (SEA), built by
+`npm run build:sea` (`scripts/build-sea.mjs`) on each platform in CI:
+
+- `scripts/bundle.mjs` inlines `dist/` and its dependencies into one CommonJS
+  file (a SEA's `require` only loads built-ins). It is a deliberately small,
+  dependency-free bundler that fails the build on any `require()` it can't
+  resolve statically, and defines `__SECURECI_VERSION__` (read by
+  `version.ts`, since package.json isn't on disk next to a binary).
+- `build-sea.mjs` makes the SEA blob, injects it into a copy of the running
+  `node` with `postject`, and ad-hoc signs it on macOS.
+- Inside a SEA `process.execPath` is the CLI itself, so `node-binary.ts` runs
+  JavaScript actions on the host with the first `node` on the step's `PATH`
+  instead. Job containers always use the image's own `node`.
 
 ## Layers
 
@@ -74,7 +97,13 @@ and exit codes live here. Keep command wiring thin; put logic in the layer below
   action.
 - `validator.ts` — `validateWorkflow()` / `validateAction()` return a
   `ValidationResult`; also runs expression/`if:` checks
-  (`workflowExpressionErrors`, `actionExpressionErrors`).
+  (`workflowExpressionErrors`, `actionExpressionErrors`) and the template
+  injection check from `injection.ts`, which uses `expressionDataFlow()` in
+  `runner/expression.ts` to see which contexts reach a `run:` script.
+- `permissions.ts` — GITHUB_TOKEN `permissions:` checks: default warnings
+  (run by `validateWorkflow`) and the contract `permissions:` policy (errors,
+  run by the contract validator). `mergeValidationResults` drops a warning an
+  error with the same rule and path supersedes.
 - `pipeline-contract-{parser,validator}.ts` — parse a `--contract` file and check
   a workflow against it, recursing into local (and, opt-in, remote) composite
   actions and reusable workflows.
@@ -108,7 +137,9 @@ other dependency points one way.
 
 `logger.ts` is the **secret-masking** logger — use it, not `console`, so masked
 values stay redacted. `key-value.ts` parses the `--input/--secret/--env/--var`
-flags; `repository.ts` finds the repo root for `./` references.
+flags; `env-file.ts` parses their `.env`-style file counterparts
+(`--env-file` etc.) and merges config defaults, files and flags in precedence
+order; `repository.ts` finds the repo root for `./` references.
 
 ## Execution flow
 
