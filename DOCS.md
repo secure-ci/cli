@@ -333,11 +333,42 @@ jobs:
   `github.head_ref`, `github.event.workflow_run.head_sha`, `.head_branch`,
   `.head_commit.id` or `.head_repository.full_name`, or a literal `refs/pull/…`
   ref.
+- **What `actions/checkout` does about it.** Since June 2026 `actions/checkout`
+  refuses to check out a fork's code under these triggers unless the step sets
+  `allow-unsafe-pr-checkout: true`
+  ([changelog](https://github.blog/changelog/2026-06-18-safer-pull_request_target-defaults-for-github-actions-checkout/)).
+  The finding stays an **error** either way, and its message says which case
+  applies:
+  - v7, a floating major tag (`@v4`), a branch (`@main`) or no version: the
+    checkout is refused by default, so the step fails until someone adds the
+    opt-out, which would run the fork's code.
+  - A commit SHA, a minor or patch version (`@v4.1.0`, `@v4.2`) or `@v1`: the
+    default doesn't apply, so the checkout succeeds. A SHA counts as
+    unprotected because its version can't be told offline.
+  - `allow-unsafe-pr-checkout: true` (or `'true'`): an explicit opt-out of the
+    protection.
 - **Warning instead of error** when the job's `if:` is a label check
   (`github.event.pull_request.labels…`, e.g.
   `contains(github.event.pull_request.labels.*.name, 'safe to test')`, or
   `github.event.label.name`): a maintainer must approve each run, so review the
   pull request's code before applying the label.
+- **Warning instead of error** when the checkout step carries a
+  `# secureci-allow dangerous-trigger: <reason>` comment, at the end of the
+  step's first line or on a line of its own directly above it. Use it when a
+  team accepts the risk, for example while workflows still track the org's own
+  actions on `@main`. The warning names the comment and quotes the reason, so
+  the exception shows up in every report. A comment with no reason doesn't
+  downgrade anything, and the error says a reason is needed.
+
+  ```yaml
+  steps:
+    # secureci-allow dangerous-trigger: org actions stay on main until the v2 release
+    - uses: actions/checkout@v4
+      with:
+        ref: ${{ github.event.pull_request.head.sha }}
+    - run: npm test
+  ```
+
 - **Warning** for the trigger alone (path `on.<trigger>`, once per privileged
   trigger), so teams can audit every such workflow. It is **omitted when a
   job-level finding above is reported**, so a workflow is never reported twice
