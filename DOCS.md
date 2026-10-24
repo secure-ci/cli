@@ -26,7 +26,7 @@ introduction and install steps, see the [README](README.md).
   - [Contract limitations (v1 scope)](#contract-limitations-v1-scope)
 - [Machine-readable output (`--format`)](#machine-readable-output---format)
 - [Action inventory and drift (`secureci inventory`)](#action-inventory-and-drift-secureci-inventory)
-  - [Drift against `secureci.lock`](#drift-against-secureciclock)
+  - [Drift against `secureci.lock`](#drift-against-securecilock)
   - [GitHub's `actions.lock`](#githubs-actionslock)
 - [Pin actions to commit SHAs (`secureci pin`)](#pin-actions-to-commit-shas-secureci-pin)
 - [Known security advisories](#known-security-advisories)
@@ -603,7 +603,7 @@ Each change is printed as `file:line owner/repo@v4 -> <sha12> (v4)`, followed by
 - **Resolution** is the same as `inventory`'s: `git ls-remote`, or the GitHub API when a token is available (`GITHUB_TOKEN`, `GH_TOKEN` or `gh auth token`). Each distinct reference is looked up once. `--offline` uses only the commits recorded in the action cache by earlier `run` or `inventory` runs. For a branch (`@main`) that is the last commit seen, not necessarily the current one.
 - **Unresolvable references** (a deleted or private repository, a missing ref, or anything not cached with `--offline`) are reported with their file and line and left unchanged. `pin` still pins everything else and exits 0; `pin --check` exits non-zero. A reference with no `@ref`, or one written as a YAML block scalar, is reported the same way.
 - **`--check`** writes nothing and exits non-zero if any reference would be pinned or can't be resolved. Use it in CI to keep workflows pinned.
-- **`--update-lock`** runs [`inventory --update-lock`](#drift-against-secureciclock) after pinning, so `secureci.lock` records the new `owner/repo@<sha>` references. It can't be combined with `--check`.
+- **`--update-lock`** runs [`inventory --update-lock`](#drift-against-securecilock) after pinning, so `secureci.lock` records the new `owner/repo@<sha>` references. It can't be combined with `--check`.
 
 ## Known security advisories
 
