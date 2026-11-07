@@ -703,7 +703,11 @@ secureci init workflow                                   # SARIF upload on (defa
 secureci init workflow --contract contracts/standard.yml # also check a pipeline contract
 secureci init workflow --no-upload                        # keep contents: read only, no code-scanning upload
 secureci init workflow --output .github/workflows/ci-security.yml
+secureci init workflow --no-pin                           # keep tag refs (actions/checkout@v4)
+secureci init workflow --offline                          # pin only refs already in the action cache
 ```
+
+By default the actions in the file are pinned to commit SHAs, as [`secureci pin`](#pin-actions-to-commit-shas-secureci-pin) would do (`actions/checkout@<sha> # v4`), so the workflow runs exactly the code you reviewed. A ref that can't be resolved (no network, or not in the cache with `--offline`) keeps its tag and is reported; run `secureci pin` on the file later to pin it. Pass `--no-pin` to keep tags.
 
 It refuses to overwrite an existing file unless you pass `--force`, and the file it writes passes `secureci validate` with no findings: `contents: read` at the top level, and `actions: read` plus `security-events: write` (for the upload) on the job. With uploads on, both the file (as a comment) and the command's output remind you that **code scanning must be enabled** for the repository (Settings > Code security; private repositories need GitHub Code Security) for the SARIF upload to work. If you can't enable it, use `--no-upload`.
 
