@@ -46,9 +46,9 @@ jobs:
       - name: Build
         run: npm run build
 
-      # Validation of this repo's workflows runs in secureci.yml (published
-      # action, SARIF to code scanning); this dry-runs ci.yaml with the CLI
-      # just built from this branch.
+      # Dry-runs (and so validates) ci.yaml with the CLI just built from
+      # this branch. secureci.yml smoke-tests the latest npm release with
+      # the action after CI passes on main.
       - name: Dry-run this workflow with SecureCI (dogfooding)
         run: node dist/cli.js run .github/workflows/ci.yaml --dry-run
 
