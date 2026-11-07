@@ -46,10 +46,11 @@ jobs:
       - name: Build
         run: npm run build
 
-      - name: Validate this repo's workflows with SecureCI (dogfooding)
-        run: |
-          node dist/cli.js validate .github/workflows/ci.yaml
-          node dist/cli.js run .github/workflows/ci.yaml --dry-run
+      # Validation of this repo's workflows runs in secureci.yml (published
+      # action, SARIF to code scanning); this dry-runs ci.yaml with the CLI
+      # just built from this branch.
+      - name: Dry-run this workflow with SecureCI (dogfooding)
+        run: node dist/cli.js run .github/workflows/ci.yaml --dry-run
 
   install-script:
     # install.sh is served from main at secure-ci.dev/install.sh, so check it
