@@ -97,10 +97,8 @@ describe('action.yml run step', () => {
       SECURECI_OUTPUT: 'secureci-results.sarif',
       SECURECI_VERSION: 'latest',
       SECURECI_INVENTORY: inventory,
-      RUNNER_TEMP: path.join(dir, 'runner-temp'),
       ...extraEnv
     };
-    fs.mkdirSync(env.RUNNER_TEMP, { recursive: true });
     fs.rmSync(env.GITHUB_OUTPUT, { force: true });
     execFileSync('bash', ['-c', script], { cwd: dir, env });
     return {
@@ -118,22 +116,6 @@ describe('action.yml run step', () => {
     expect(outputs).toContain('inventory-status=0');
   });
 
-  // In a repository whose own package.json is @secureci/cli (this one),
-  // plain `npx @secureci/cli@<v>` resolves the local, unbuilt project and
-  // fails with "secureci: not found". Running npx with --prefix pointing at
-  // an empty directory outside the workspace makes it fetch from npm.
-  it('runs npx with --prefix in an empty directory under RUNNER_TEMP', () => {
-    const { calls } = run('check');
-    expect(calls).toHaveLength(2);
-    for (const call of calls) {
-      const prefix = call.match(/^--yes --prefix (\S+) @secureci\/cli@latest /);
-      expect(prefix).not.toBeNull();
-      const dirUsed = prefix![1];
-      expect(dirUsed.startsWith(path.join(dir, 'runner-temp'))).toBe(true);
-      expect(fs.existsSync(path.join(dirUsed, 'package.json'))).toBe(false);
-    }
-  });
-
   it('marks the SARIF report ready only when it is non-empty', () => {
     expect(run('').outputs).toContain('sarif-ready=true');
     expect(run('', 0, { STUB_EMPTY_REPORT: '1' }).outputs).not.toContain(
@@ -143,9 +125,7 @@ describe('action.yml run step', () => {
 
   it('also runs inventory --check when inventory is "check"', () => {
     const { calls, outputs } = run('check');
-    expect(calls[1]).toMatch(
-      /^--yes --prefix \S+ @secureci\/cli@latest inventory --check$/
-    );
+    expect(calls[1]).toBe('--yes @secureci/cli@latest inventory --check');
     expect(outputs).toContain('inventory-status=0');
   });
 

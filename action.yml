@@ -95,17 +95,10 @@ runs:
           args+=(--contract "${SECURECI_CONTRACT}" --contract-recurse "${SECURECI_RECURSE}")
         fi
 
-        # Run npx from an empty prefix outside the workspace: in a repository
-        # whose own package.json is @secureci/cli, npx would otherwise resolve
-        # the local (unbuilt) project and fail with "secureci: not found".
-        npx_prefix="$(mktemp -d "${RUNNER_TEMP:-/tmp}/secureci-npx.XXXXXX")"
-        secureci() {
-          npx --yes --prefix "$npx_prefix" "@secureci/cli@${SECURECI_VERSION}" "$@"
-        }
-
         echo "Running: secureci ${args[*]}"
         status=0
-        secureci "${args[@]}" > "${SECURECI_OUTPUT}" || status=$?
+        npx --yes "@secureci/cli@${SECURECI_VERSION}" "${args[@]}" \
+          > "${SECURECI_OUTPUT}" || status=$?
         echo "report=${SECURECI_OUTPUT}" >> "$GITHUB_OUTPUT"
         echo "status=${status}" >> "$GITHUB_OUTPUT"
         # An empty report means the CLI failed before writing one; uploading
@@ -120,7 +113,7 @@ runs:
         inventory_status=0
         if [ "${SECURECI_INVENTORY}" = "check" ]; then
           echo "Running: secureci inventory --check"
-          secureci inventory --check || inventory_status=$?
+          npx --yes "@secureci/cli@${SECURECI_VERSION}" inventory --check || inventory_status=$?
           if [ "$inventory_status" -ne 0 ]; then
             echo "::error::SecureCI found action drift against secureci.lock (or no lockfile). See the log above."
           fi
