@@ -39,6 +39,16 @@ describe('action.yml', () => {
     expect(fail.if).toContain('steps.run.outputs.status');
     expect(fail.if).toContain('steps.run.outputs.inventory-status');
   });
+
+  // An empty report (the CLI crashed before writing SARIF) would fail the
+  // upload with "Invalid SARIF" and hide the real error, so the upload is
+  // gated on the run step having written a non-empty report.
+  it('uploads SARIF only when the run step wrote a non-empty report', () => {
+    const upload = action.runs.steps.find(
+      (s: { name?: string }) => s.name === 'Upload SARIF to code scanning'
+    );
+    expect(upload.if).toContain("steps.run.outputs.sarif-ready == 'true'");
+  });
 });
 
 // Runs the action's main bash step with a stub `npx` that records its
@@ -61,14 +71,20 @@ describe('action.yml run step', () => {
     fs.writeFileSync(
       path.join(dir, 'bin', 'npx'),
       '#!/usr/bin/env bash\necho "$*" >> "$STUB_LOG"\n' +
-        'if [[ "$*" == *" inventory "* ]]; then exit "${STUB_INVENTORY_EXIT:-0}"; fi\n',
+        'if [[ "$*" == *" inventory "* ]]; then exit "${STUB_INVENTORY_EXIT:-0}"; fi\n' +
+        // validate writes the report to stdout unless STUB_EMPTY_REPORT is set.
+        'if [[ "$*" == *" validate "* && -z "${STUB_EMPTY_REPORT:-}" ]]; then echo "{}"; fi\n',
       { mode: 0o755 }
     );
   });
 
   afterEach(() => fs.rmSync(dir, { recursive: true, force: true }));
 
-  function run(inventory: string, inventoryExit = 0) {
+  function run(
+    inventory: string,
+    inventoryExit = 0,
+    extraEnv: Record<string, string> = {}
+  ) {
     const env = {
       PATH: `${path.join(dir, 'bin')}:${process.env.PATH}`,
       GITHUB_OUTPUT: path.join(dir, 'out'),
@@ -80,8 +96,12 @@ describe('action.yml run step', () => {
       SECURECI_FORMAT: 'sarif',
       SECURECI_OUTPUT: 'secureci-results.sarif',
       SECURECI_VERSION: 'latest',
-      SECURECI_INVENTORY: inventory
+      SECURECI_INVENTORY: inventory,
+      RUNNER_TEMP: path.join(dir, 'runner-temp'),
+      ...extraEnv
     };
+    fs.mkdirSync(env.RUNNER_TEMP, { recursive: true });
+    fs.rmSync(env.GITHUB_OUTPUT, { force: true });
     execFileSync('bash', ['-c', script], { cwd: dir, env });
     return {
       calls: fs.existsSync(env.STUB_LOG)
@@ -98,9 +118,34 @@ describe('action.yml run step', () => {
     expect(outputs).toContain('inventory-status=0');
   });
 
+  // In a repository whose own package.json is @secureci/cli (this one),
+  // plain `npx @secureci/cli@<v>` resolves the local, unbuilt project and
+  // fails with "secureci: not found". Running npx with --prefix pointing at
+  // an empty directory outside the workspace makes it fetch from npm.
+  it('runs npx with --prefix in an empty directory under RUNNER_TEMP', () => {
+    const { calls } = run('check');
+    expect(calls).toHaveLength(2);
+    for (const call of calls) {
+      const prefix = call.match(/^--yes --prefix (\S+) @secureci\/cli@latest /);
+      expect(prefix).not.toBeNull();
+      const dirUsed = prefix![1];
+      expect(dirUsed.startsWith(path.join(dir, 'runner-temp'))).toBe(true);
+      expect(fs.existsSync(path.join(dirUsed, 'package.json'))).toBe(false);
+    }
+  });
+
+  it('marks the SARIF report ready only when it is non-empty', () => {
+    expect(run('').outputs).toContain('sarif-ready=true');
+    expect(run('', 0, { STUB_EMPTY_REPORT: '1' }).outputs).not.toContain(
+      'sarif-ready=true'
+    );
+  });
+
   it('also runs inventory --check when inventory is "check"', () => {
     const { calls, outputs } = run('check');
-    expect(calls[1]).toBe('--yes @secureci/cli@latest inventory --check');
+    expect(calls[1]).toMatch(
+      /^--yes --prefix \S+ @secureci\/cli@latest inventory --check$/
+    );
     expect(outputs).toContain('inventory-status=0');
   });
 

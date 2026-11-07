@@ -22,4 +22,8 @@ jobs:
       security-events: write # upload SARIF to code scanning
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      - uses: secure-ci/cli@8df038a7e2e4b5eae216696fa917bbecc1baf365 # v0.9.0
+      # This repo uses its own action from the checkout (`./`) rather than a
+      # release tag, so the branch's action.yml is what runs. Other repos
+      # should keep the pinned `secure-ci/cli@<sha> # v<version>` that
+      # `secureci init workflow` generates.
+      - uses: ./
