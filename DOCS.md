@@ -672,9 +672,12 @@ permissions:
 jobs:
   secureci:
     runs-on: ubuntu-latest
+    # The SARIF upload needs code scanning enabled for this repository
+    # (Settings > Code security); otherwise set upload-sarif: false.
     permissions:
       contents: read
-      security-events: write # for the SARIF upload
+      actions: read # upload-sarif reads the workflow run
+      security-events: write # upload SARIF to code scanning
     steps:
       - uses: actions/checkout@v4
       - uses: secure-ci/cli@v0.9.0 # a release tag; see below
@@ -702,7 +705,7 @@ secureci init workflow --no-upload                        # keep contents: read 
 secureci init workflow --output .github/workflows/ci-security.yml
 ```
 
-It refuses to overwrite an existing file unless you pass `--force`, and the file it writes passes `secureci validate` with no findings: `contents: read` at the top level, and `security-events: write` (for the upload) on the job.
+It refuses to overwrite an existing file unless you pass `--force`, and the file it writes passes `secureci validate` with no findings: `contents: read` at the top level, and `actions: read` plus `security-events: write` (for the upload) on the job. With uploads on, both the file (as a comment) and the command's output remind you that **code scanning must be enabled** for the repository (Settings > Code security; private repositories need GitHub Code Security) for the SARIF upload to work. If you can't enable it, use `--no-upload`.
 
 ## Using output as audit evidence
 

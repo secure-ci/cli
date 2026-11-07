@@ -27,7 +27,7 @@ inputs:
     required: false
     default: 'secureci-results.sarif'
   upload-sarif:
-    description: 'Upload the SARIF report to GitHub code scanning (needs security-events: write; ignored for json).'
+    description: 'Upload the SARIF report to GitHub code scanning (needs actions: read and security-events: write, and code scanning enabled for the repository; ignored for json).'
     required: false
     default: 'true'
   inventory:

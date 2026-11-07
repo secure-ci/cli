@@ -1154,7 +1154,10 @@ function runInit(options: {
   logger.success(`Wrote ${options.output}`);
   if (options.upload) {
     logger.info(
-      'The workflow uploads SARIF to code scanning (needs security-events: write).'
+      'The workflow uploads SARIF to code scanning (needs actions: read and security-events: write).'
+    );
+    logger.info(
+      'Code scanning must be enabled for the repository (Settings > Code security) for the SARIF upload to work; otherwise regenerate with --no-upload.'
     );
   }
   logger.info('Commit it and open a pull request to see SecureCI run.');

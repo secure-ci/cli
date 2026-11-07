@@ -1673,6 +1673,8 @@ describe('secureci commands', () => {
 
     const first = run(['init', 'workflow'], dir);
     expect(first.status).toBe(0);
+    // It tells the user code scanning must be enabled for the SARIF upload.
+    expect(first.stdout).toMatch(/code scanning must be enabled/i);
     expect(fs.existsSync(out)).toBe(true);
     // The action ref is this CLI's own release tag (package.json version).
     const { version } = JSON.parse(
@@ -1693,8 +1695,10 @@ describe('secureci commands', () => {
     // --no-upload keeps contents: read only and the file still validates.
     const forced = run(['init', 'workflow', '--no-upload', '--force'], dir);
     expect(forced.status).toBe(0);
+    expect(forced.stdout).not.toMatch(/code scanning must be enabled/i);
     const content = fs.readFileSync(out, 'utf-8');
     expect(content).not.toContain('security-events');
+    expect(content).not.toContain('actions: read');
     expect(content).toContain('upload-sarif: false');
     expect(run(['validate', out], dir).status).toBe(0);
 
