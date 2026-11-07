@@ -1748,10 +1748,8 @@ describe('secureci commands', () => {
       expect(content).toContain(`uses: actions/checkout@${checkout} # v4\n`);
       // Unresolvable refs stay on their tag, with a warning naming them.
       expect(content).toContain(`uses: secure-ci/cli@v${version}\n`);
-      expect(partial.stdout + partial.stderr).toMatch(
-        new RegExp(
-          `secure-ci/cli@v${version.replace(/\./g, '\\.')} could not be resolved`
-        )
+      expect(partial.stdout + partial.stderr).toContain(
+        `secure-ci/cli@v${version} could not be resolved`
       );
       expect(partial.stdout + partial.stderr).toContain('secureci pin');
 
