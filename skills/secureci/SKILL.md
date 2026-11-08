@@ -131,7 +131,7 @@ require a user response before continuing.
    Snippet:
 
    ```yaml
-   - uses: secure-ci/cli@<40-char-sha> # v0.9.0
+   - uses: secure-ci/cli@<40-char-sha> # v1.0.0
      with:
        inventory: check
        upload-sarif: false
@@ -139,8 +139,11 @@ require a user response before continuing.
 
    - There is no moving major tag (`@v1`, `@v0`); use a release tag's SHA.
    - `upload-sarif: false` keeps the job's existing permissions. Offer the
-     opt-in: drop that line and add `security-events: write` to the job's
-     `permissions:` to get findings inline on the PR via code scanning.
+     opt-in: drop that line and add `actions: read` and
+     `security-events: write` to the job's `permissions:` to get findings
+     inline on the PR via code scanning. The upload only works once code
+     scanning is enabled for the repository (Settings > Code security; private
+     repositories need GitHub Code Security); say so when offering it.
    - Pass `contract: <path>` only if the repo already has a pipeline contract.
 
    Show the full diff and confirm before writing. **[wait for user]**
