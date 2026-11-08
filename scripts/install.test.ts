@@ -148,6 +148,17 @@ function run(setup: Setup = {}) {
     { mode: 0o755 }
   );
 
+  // A curl wrapper that logs each call's arguments, then runs the real curl.
+  const realCurl = spawnSync('sh', ['-c', 'command -v curl'], {
+    encoding: 'utf8'
+  }).stdout.trim();
+  const curlLog = path.join(bin, 'curl.log');
+  fs.writeFileSync(
+    path.join(bin, 'curl'),
+    `#!/bin/sh\nprintf '%s\\n' "$*" >>"${curlLog}"\nexec "${realCurl}" "$@"\n`,
+    { mode: 0o755 }
+  );
+
   const home = tmp('secureci-home-');
   const installDir = path.join(home, 'bin');
   const result = spawnSync('sh', [SCRIPT], {
@@ -163,7 +174,10 @@ function run(setup: Setup = {}) {
   });
   const installed = path.join(installDir, 'secureci');
   const output = result.stdout + result.stderr;
-  return { status: result.status, output, installed, home };
+  const curlCalls = fs.existsSync(curlLog)
+    ? fs.readFileSync(curlLog, 'utf8').trim().split('\n')
+    : [];
+  return { status: result.status, output, installed, home, curlCalls };
 }
 
 describe('install.sh', () => {
@@ -261,6 +275,14 @@ describe('install.sh', () => {
     const r = run({ ghAuth: 1, env: { SECURECI_REQUIRE_ATTESTATION: '1' } });
     expect(r.status).not.toBe(0);
     expect(fs.existsSync(r.installed)).toBe(false);
+  });
+
+  it('retries transient server errors (5xx, timeouts) on every download', () => {
+    const r = run({ downloadsFail: true });
+    expect(r.status, r.output).toBe(0);
+    // Release URL x2, API release JSON, API asset x2.
+    expect(r.curlCalls.length).toBe(5);
+    for (const call of r.curlCalls) expect(call).toMatch(/--retry 3 /);
   });
 
   describe('when the release download URL fails', () => {

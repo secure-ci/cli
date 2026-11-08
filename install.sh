@@ -77,9 +77,11 @@ detect_asset() {
 
 try_download() {
   # $1 = URL, $2 = output file, $3 = optional request header. HTTPS only,
-  # including redirects (file:// is allowed for mirrors and tests).
+  # including redirects (file:// is allowed for mirrors and tests). curl
+  # retries transient errors (timeouts, HTTP 408/429/500/502/503/504), which
+  # GitHub's release downloads and API both return intermittently.
   if has curl; then
-    curl -fsSL --proto '=https,file' --proto-redir '=https' \
+    curl -fsSL --retry 3 --retry-delay 2 --proto '=https,file' --proto-redir '=https' \
       ${3:+-H "$3"} -o "$2" "$1"
   elif has wget; then
     wget -q --https-only ${3:+--header="$3"} -O "$2" "$1"
