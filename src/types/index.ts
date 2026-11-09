@@ -13,8 +13,14 @@ export interface WorkflowFile {
   permissions?: Permissions;
   env?: Record<string, string>;
   defaults?: WorkflowDefaults;
+  /** Not applied in local runs (there are no other runs to queue or cancel). */
+  concurrency?: Concurrency;
   jobs: Record<string, Job>;
 }
+
+/** `concurrency:` at the workflow or job level. */
+export type Concurrency =
+  string | { group: string; 'cancel-in-progress'?: boolean | string };
 
 export type WorkflowTrigger = string | string[] | Record<string, unknown>;
 
@@ -57,6 +63,7 @@ export interface Job {
   'timeout-minutes'?: number | string;
   /** Let the job (or a matrix combination) fail without failing the run. */
   'continue-on-error'?: boolean | string;
+  concurrency?: Concurrency;
 }
 
 /** `jobs.<id>.container`: the image (and env) the job's steps run in. */

@@ -205,6 +205,17 @@ export async function executeWorkflow(
       }
 
       logger.info(`Executing workflow: ${parsed.file.name}`);
+      const concurrencyAt = [
+        ...(parsed.file.concurrency ? ['workflow'] : []),
+        ...Object.entries(parsed.file.jobs)
+          .filter(([, job]) => job.concurrency)
+          .map(([id]) => `jobs.${id}`)
+      ];
+      if (concurrencyAt.length > 0) {
+        logger.info(
+          `concurrency: isn't applied in a local run (${concurrencyAt.join(', ')}): it doesn't queue behind or cancel other runs, and jobs run as needs: and --parallel allow`
+        );
+      }
 
       options = {
         ...options,
