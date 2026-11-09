@@ -274,6 +274,12 @@ export interface RunOptions {
    * repository instead of running the action. Default: true.
    */
   localCheckout?: boolean;
+  /**
+   * Run each job (and matrix combination) in its own copy of the working
+   * copy, removed when the job ends, so parallel jobs can't overwrite each
+   * other's files (`--isolate-workspace`). Default: false.
+   */
+  isolateWorkspace?: boolean;
   /** Use only cached remote actions; never download. */
   offline?: boolean;
   /** `github.run_id`, shared by every job and called workflow of a run. */

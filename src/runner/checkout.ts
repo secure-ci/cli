@@ -33,8 +33,38 @@ export function copyWorkingCopy(
     fs.cpSync(src, dst, {
       recursive: true,
       verbatimSymlinks: true,
+      // Copy-on-write clones where the file system supports them.
+      mode: fs.constants.COPYFILE_FICLONE,
       filter: (file) => !fs.existsSync(path.join(file, CHECKOUT_MARKER))
     });
+  }
+}
+
+/**
+ * A copy of the working copy (uncommitted changes and .git included) for
+ * one job, in `parentDir`, for --isolate-workspace. Remove it with
+ * removeIsolatedWorkspace.
+ */
+export function createIsolatedWorkspace(
+  workingCopy: string,
+  parentDir: string
+): string {
+  const dir = fs.mkdtempSync(path.join(parentDir, 'workspace-'));
+  copyWorkingCopy(workingCopy, dir, dir);
+  return dir;
+}
+
+/**
+ * Remove a job's isolated workspace. Best effort: files a container step
+ * created as another user may not be removable, which is only warned about.
+ */
+export function removeIsolatedWorkspace(dir: string): void {
+  try {
+    fs.rmSync(dir, { recursive: true, force: true });
+  } catch (error) {
+    logger.warn(
+      `Couldn't remove the job's workspace copy ${dir}: ${error instanceof Error ? error.message : String(error)}`
+    );
   }
 }
 

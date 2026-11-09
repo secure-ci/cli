@@ -54,6 +54,7 @@ import {
   startJobServices
 } from './job-container';
 import { executeStep } from './steps';
+import { createIsolatedWorkspace, removeIsolatedWorkspace } from './checkout';
 import {
   warnUnsandboxedActions,
   runPreSteps,
@@ -412,13 +413,28 @@ export async function executeWorkflow(
             ): Promise<UnitOutcome> => {
               const jobLabel = labelOf(matrixValues);
 
-              const runtime = createJobRuntime(github, runDir, {
-                shell:
-                  job.defaults?.run?.shell ?? parsed.file.defaults?.run?.shell,
-                workingDirectory:
-                  job.defaults?.run?.['working-directory'] ??
-                  parsed.file.defaults?.run?.['working-directory']
-              });
+              // With --isolate-workspace, the job (and github.workspace) gets
+              // its own copy of the working copy.
+              const workspace = options.isolateWorkspace
+                ? createIsolatedWorkspace(process.cwd(), runDir)
+                : process.cwd();
+              const comboGithub = options.isolateWorkspace
+                ? { ...github, workspace }
+                : github;
+
+              const runtime = createJobRuntime(
+                comboGithub,
+                runDir,
+                {
+                  shell:
+                    job.defaults?.run?.shell ??
+                    parsed.file.defaults?.run?.shell,
+                  workingDirectory:
+                    job.defaults?.run?.['working-directory'] ??
+                    parsed.file.defaults?.run?.['working-directory']
+                },
+                workspace
+              );
               runtime.signal = signal;
 
               // Workflow-level env can't reference `env` itself; job-level
@@ -431,7 +447,7 @@ export async function executeWorkflow(
                     { ...options.env },
                     inputs,
                     options.secrets,
-                    github
+                    comboGithub
                   ),
                   vars
                 })
@@ -441,7 +457,7 @@ export async function executeWorkflow(
                   workflowEnv,
                   inputs,
                   options.secrets,
-                  github,
+                  comboGithub,
                   matrixValues
                 ),
                 needs,
@@ -452,7 +468,7 @@ export async function executeWorkflow(
                   { ...workflowEnv, ...jobEnv },
                   inputs,
                   options.secrets,
-                  github,
+                  comboGithub,
                   matrixValues
                 ),
                 needs,
@@ -714,6 +730,9 @@ export async function executeWorkflow(
                 }
               } finally {
                 await stopping;
+                if (options.isolateWorkspace) {
+                  removeIsolatedWorkspace(workspace);
+                }
               }
 
               const jobSuccess = stepResults.every(
