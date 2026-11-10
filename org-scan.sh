@@ -22,7 +22,9 @@
 #   3. Saves that JSON under the output directory and deletes the clone.
 #
 # Then it writes manifest.json (what was scanned, when, with which versions)
-# and packs everything into <output>.tar.gz. That archive is what you send us.
+# and packs everything into <output>.tar.gz. That archive is what you email to
+# hello@secure-ci.dev (if your policy doesn't allow email, tell us and we'll
+# agree another way).
 # It holds only the JSON results (repository and workflow names, the actions
 # they use, and the findings), never your source code. Look inside before you
 # send it: `tar -tzf <output>.tar.gz`.
@@ -370,6 +372,9 @@ Archive: $OUT.tar.gz
 The archive holds only JSON results (repository and workflow names, the
 actions they use and the findings) plus errors.log, never source code.
 Check it before you send it:  tar -tzf $OUT.tar.gz
+
+Email it to hello@secure-ci.dev. If your policy doesn't allow sending it by
+email, write to us there and we'll agree another way.
 EOF
 }
 

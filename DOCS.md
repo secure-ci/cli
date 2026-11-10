@@ -789,7 +789,9 @@ The output directory holds:
   clone or advisories that couldn't be checked.
 
 Nothing else is written: no source code, and not your token. Check the archive
-before you send it with `tar -tzf secureci-org-scan-<org>.tar.gz`.
+before you send it with `tar -tzf secureci-org-scan-<org>.tar.gz`. Then email
+it to [hello@secure-ci.dev](mailto:hello@secure-ci.dev); if your policy
+doesn't allow that, write to us there and we'll agree another way.
 
 **Token.** Set `GITHUB_TOKEN` (or `GH_TOKEN`) to a token that can read the
 organisation's repositories (`contents: read` and `metadata: read`). Without

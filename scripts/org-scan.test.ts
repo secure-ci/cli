@@ -293,6 +293,9 @@ describe('org-scan.sh', () => {
     });
     expect(listing).toContain('secureci-org-scan-acme/manifest.json');
     expect(listing).not.toContain('src/index.js');
+    // It says where to send the archive, and that other routes exist.
+    expect(result.stdout).toContain('Email it to hello@secure-ci.dev');
+    expect(result.stdout).toContain("we'll agree another way");
     expect(result.stdout).toContain(
       path.join(fs.realpathSync(s.cwd), 'secureci-org-scan-acme.tar.gz')
     );
