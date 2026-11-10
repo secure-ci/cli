@@ -99,7 +99,7 @@ Release binaries are Node.js single executable applications (SEA), built by
   ships it: `scripts/install.test.ts` runs it against a fake `file://` release,
   and the `install-script` CI job installs the real latest release with it on
   Ubuntu and macOS.
-- `org-scan.sh` (repository root, bash) is the org report collector: it lists
+- `org-scan.sh` (repository root, bash) is the supply-chain assessment collector: it lists
   an org's repositories over the API (or reads `--repos`), sparse-clones
   `.github/` of each, and runs `secureci validate --format json` and
   `inventory --dry-run`. `secure-ci.dev/org-scan.sh` redirects to it on

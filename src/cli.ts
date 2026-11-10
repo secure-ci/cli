@@ -1383,12 +1383,14 @@ configCmd
 
 const orgCmd = program
   .command('org')
-  .description('Organisation-wide commands (for a SecureCI org report)');
+  .description(
+    'Organisation-wide commands (for a SecureCI supply-chain assessment)'
+  );
 
 orgCmd
   .command('scan')
   .description(
-    'Scan the GitHub Actions workflows of every repository in an organisation and pack the JSON results for a SecureCI org report (runs org-scan.sh; source code is never downloaded)'
+    'Scan the GitHub Actions workflows of every repository in an organisation and pack the JSON results for a SecureCI supply-chain assessment (runs org-scan.sh; source code is never downloaded)'
   )
   .argument('[org]', 'GitHub organisation (or user) to scan')
   .option(

@@ -83,7 +83,7 @@ secureci inventory --check         # compare against ./secureci.lock, fail on dr
 secureci pin                       # every workflow, plus the local actions they use
 secureci pin --check               # fail if anything would change (for CI)
 
-# Scan every repository in an organisation, for a SecureCI org report
+# Scan every repository in an organisation, for a SecureCI supply-chain assessment
 secureci org scan my-org           # JSON results + secureci-org-scan-my-org.tar.gz
 secureci org scan --print-script   # print the script it runs, to review it
 
@@ -749,7 +749,7 @@ These artifacts **support** controls; they don't make you compliant on their own
 
 `secureci org scan <org>` runs `validate` and `inventory` on every repository
 in a GitHub organisation (or user account) and packs the JSON results into one
-archive, for a free [SecureCI org report](https://secure-ci.dev/#sample-report).
+archive, for a [SecureCI supply-chain assessment](https://secure-ci.dev/#sample-report).
 It runs [`org-scan.sh`](org-scan.sh), a short bash script you can also
 download and run on its own:
 

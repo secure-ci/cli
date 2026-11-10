@@ -4,7 +4,7 @@ import { ORG_SCAN_SCRIPT } from './org-scan-script';
 
 /**
  * `secureci org scan`: run org-scan.sh (embedded as ORG_SCAN_SCRIPT) to scan
- * every workflow in an organisation for a SecureCI org report. The script is
+ * every workflow in an organisation for a SecureCI supply-chain assessment. The script is
  * the source of truth, so what people read before running it is exactly
  * what runs; this module only writes it to a temporary file and starts bash.
  */

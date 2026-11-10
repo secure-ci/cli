@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Scan every GitHub Actions workflow in an organisation with the SecureCI CLI,
-# for a SecureCI org report.
+# for a SecureCI supply-chain assessment.
 #
 #   bash org-scan.sh <org>
 #
@@ -64,7 +64,7 @@ usage() {
 Usage: org-scan.sh [options] <org>
 
 Scan every GitHub Actions workflow in <org> with the SecureCI CLI and pack the
-JSON results into <output>.tar.gz for a SecureCI org report.
+JSON results into <output>.tar.gz for a SecureCI supply-chain assessment.
 
 Options:
   --repos <file>     scan only these repositories: one per line, "name" or
