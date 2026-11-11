@@ -198,8 +198,25 @@ function cloneInto(
     'commit' in what
       ? [`file://${workspace}`, what.commit, undefined]
       : [what.source, what.ref, what.env];
+  // `source` (the origin URL) and `ref` come from outside: never let either
+  // be read as an option (`--upload-pack=<cmd>`), and never allow the
+  // `ext::` transport, which runs a command, whatever the user's config says.
   if (
-    !ok(['fetch', '--quiet', '--no-tags', ...depthArgs, source, ref], dest, env)
+    !ok(
+      [
+        '-c',
+        'protocol.ext.allow=never',
+        'fetch',
+        '--quiet',
+        '--no-tags',
+        ...depthArgs,
+        '--end-of-options',
+        source,
+        ref
+      ],
+      dest,
+      env
+    )
   ) {
     return undefined;
   }

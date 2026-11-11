@@ -3583,6 +3583,43 @@ jobs:
           expect(fs.existsSync(path.join(workDir, 'pr'))).toBe(false);
         });
 
+        for (const [label, url] of [
+          [
+            'an option (--upload-pack)',
+            '--upload-pack=touch PWNED;git-upload-pack'
+          ],
+          ['an ext:: command transport', 'ext::sh -c touch% PWNED']
+        ] as const) {
+          it(`never runs a command from an origin URL that is ${label} (CodeQL)`, async () => {
+            const marker = path.join(workDir, 'PWNED');
+            const gitConfig = path.join(origin, 'allow-ext.gitconfig');
+            // Even with the user's own config allowing ext::.
+            fs.writeFileSync(gitConfig, '[protocol "ext"]\n\tallow = always\n');
+            const saved = process.env.GIT_CONFIG_GLOBAL;
+            process.env.GIT_CONFIG_GLOBAL = gitConfig;
+            try {
+              git(
+                'remote',
+                'set-url',
+                'origin',
+                '--',
+                url.replace('PWNED', marker)
+              );
+              const result = await executeWorkflow(prCheckout(), {
+                fetchRefs: true
+              });
+              expect(result.success).toBe(false);
+              expect(result.jobs[0].steps[0].error).toContain(
+                'couldn\'t fetch ref "refs/pull/1/merge" from origin'
+              );
+              expect(fs.existsSync(marker)).toBe(false);
+            } finally {
+              if (saved === undefined) delete process.env.GIT_CONFIG_GLOBAL;
+              else process.env.GIT_CONFIG_GLOBAL = saved;
+            }
+          });
+        }
+
         it('honours fetch-depth for a ref checked out into path:', async () => {
           git('tag', 'v2');
           const run = (depth: string) =>
