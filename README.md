@@ -212,6 +212,9 @@ in the job reuses it, so tools and files from earlier steps persist.
   `--container-runtime`. The image follows `jobs.<id>.container`,
   `--container-image`, or a `runs-on` → runner-image mapping you can override in
   config.
+- **Profiles** (`secureci.yml`, `--profile dev`) — swap a private self-hosted
+  `runs-on`, job container image or service image for ones you can reach, plus
+  per-profile env, vars and settings, without editing the workflow.
 - **Service containers** (`jobs.<id>.services`) — databases, caches and other
   sidecars start before the job, join its network (reachable by hostname like
   `postgres:5432`), wait for health checks, and are torn down with the job.
