@@ -11,9 +11,11 @@ import {
   cachedActionSha,
   getActionCacheDir,
   githubToken,
+  lsRemoteTags,
   repoExists,
   resolveActionSha,
-  resolveRepoIdentity
+  resolveRepoIdentity,
+  serverUrl
 } from './runner/action-fetcher';
 import { Progress } from './utils/progress';
 import { resolveContractSource } from './contract-source';
@@ -35,7 +37,15 @@ import {
   ReportFormat
 } from './report';
 import { renderInitWorkflow } from './init';
-import { localPinTargets, pinContent } from './pin';
+import { findUsesSites, localPinTargets, pinContent } from './pin';
+import {
+  latestTag,
+  matchesAction,
+  parseActionSpec,
+  remoteActionRepos,
+  updateContent,
+  UpdateTarget
+} from './update';
 import {
   AdvisoryChecker,
   AdvisoryReport,
@@ -503,6 +513,33 @@ program
   .action(async (files: string[], options) => {
     await runPin(files, options);
   });
+
+program
+  .command('update')
+  .description(
+    'Move an action to a version, or its latest release, pinned to its commit SHA (`owner/repo@<sha> # v7.0.1`), in every workflow that uses it'
+  )
+  .argument(
+    '[action]',
+    'owner/repo[@ref] or owner/repo/path[@ref]; without @ref, the latest release. owner/repo covers every path in the repository'
+  )
+  .argument(
+    '[file...]',
+    'Workflow or action files (default: every file in .github/workflows, plus the local actions and reusable workflows they use)'
+  )
+  .option(
+    '--all',
+    'Update every remote action to its latest release (every argument is then a file)'
+  )
+  .action(
+    async (
+      action: string | undefined,
+      files: string[],
+      options: { all?: boolean }
+    ) => {
+      await runUpdate(action, files, options);
+    }
+  );
 
 program
   .command('list')
@@ -1099,6 +1136,164 @@ async function runPin(
   if (options.updateLock) {
     await runInventory(files, { offline: options.offline, updateLock: true });
   }
+}
+
+/**
+ * `secureci update`: move one action (or, with --all, every remote action)
+ * to a ref, re-pinning it to that ref's commit, then refresh secureci.lock
+ * when the repository has one.
+ */
+async function runUpdate(
+  action: string | undefined,
+  files: string[],
+  options: { all?: boolean }
+): Promise<void> {
+  if (options.all && action !== undefined) files = [action, ...files];
+  const spec = options.all ? undefined : action && parseActionSpec(action);
+  if (!options.all && !spec) {
+    logger.error(
+      action
+        ? `${action} is not an action reference (owner/repo[@ref] or owner/repo/path[@ref]).`
+        : 'Name an action to update (e.g. `secureci update actions/checkout@v4.2.2`), or pass --all.'
+    );
+    process.exit(1);
+  }
+  const given = files.length > 0 ? files : defaultWorkflowFiles();
+  if (given.length === 0) {
+    logger.error('No workflow files given and none found in .github/workflows');
+    process.exit(1);
+  }
+  given.forEach(requireFile);
+  const targets = files.length > 0 ? given : localPinTargets(given);
+  const display = (file: string) =>
+    path.relative(process.cwd(), path.resolve(file)) || file;
+
+  const contents = new Map<string, string>();
+  let unreadable = false;
+  for (const file of targets) {
+    try {
+      const content = fs.readFileSync(file, 'utf-8');
+      findUsesSites(content); // throws on invalid YAML
+      contents.set(file, content);
+    } catch (error) {
+      logger.error(
+        `Could not read ${display(file)}: ${error instanceof Error ? error.message : 'Unknown error'}`
+      );
+      unreadable = true;
+    }
+  }
+
+  // Naming an action no file uses is a mistake; say so before resolving.
+  if (
+    spec &&
+    ![...contents.values()].some((content) =>
+      findUsesSites(content).some((site) => matchesAction(site.uses, spec.name))
+    )
+  ) {
+    logger.error(
+      `${spec.name} is not used in ${files.length > 0 ? 'the given files' : '.github/workflows or the local actions they use'}; nothing to update.`
+    );
+    process.exit(1);
+  }
+
+  // What to move each action to: the ref asked for, else the latest release.
+  const wanted: Array<{
+    name: string;
+    owner: string;
+    repo: string;
+    ref?: string;
+  }> = spec
+    ? [spec]
+    : [...new Set([...contents.values()].flatMap(remoteActionRepos))].map(
+        (name) => {
+          const [owner, repo] = name.split('/');
+          return { name, owner, repo };
+        }
+      );
+  // A named action that can't be resolved is an error; under --all, one
+  // repository without a release doesn't stop the others.
+  const problem = (message: string) =>
+    spec ? logger.error(message) : logger.warn(message);
+  const resolving = new Progress('Resolving versions', wanted.length);
+  const updates: UpdateTarget[] = [];
+  let unresolved = 0;
+  for (const want of wanted) {
+    resolving.tick(want.name);
+    let ref = want.ref;
+    if (ref === undefined) {
+      const tags = await lsRemoteTags(
+        `${serverUrl()}/${want.owner}/${want.repo}.git`
+      );
+      ref = tags && latestTag(tags.keys());
+      if (!ref) {
+        problem(
+          `${want.name}: no release found (${tags ? 'no version tags' : 'the repository could not be read'}); left unchanged`
+        );
+        unresolved++;
+        continue;
+      }
+    }
+    const sha = await resolveActionSha(`${want.owner}/${want.repo}@${ref}`);
+    if (!sha) {
+      problem(
+        `${want.name}@${ref} could not be resolved to a commit (check that the repository and ref exist${githubToken() ? '' : '; set GITHUB_TOKEN for private repositories'}); left unchanged`
+      );
+      unresolved++;
+      continue;
+    }
+    updates.push({ name: want.name, ref, sha });
+  }
+  resolving.done(`Resolved ${updates.length} version(s)`);
+  if (spec && updates.length === 0) process.exit(1);
+
+  let changes = 0;
+  let changedFiles = 0;
+  for (const [file, original] of contents) {
+    let content = original;
+    for (const target of updates) {
+      const result = updateContent(content, target);
+      for (const c of result.changes) {
+        logger.info(
+          `${display(file)}:${c.line} ${c.uses} -> ${c.sha.slice(0, 12)} (${c.ref})`
+        );
+      }
+      for (const u of result.skipped) {
+        logger.warn(`${display(file)}:${u.line} ${u.uses} ${u.reason}`);
+      }
+      changes += result.changes.length;
+      content = result.content;
+    }
+    if (content !== original) {
+      changedFiles++;
+      fs.writeFileSync(file, content);
+    }
+  }
+
+  if (changes > 0) {
+    logger.success(
+      `Updated ${changes} reference(s) in ${changedFiles} file(s).`
+    );
+  } else if (spec) {
+    logger.success(`${spec.name} is already at ${updates[0].ref}.`);
+  } else {
+    logger.success('Nothing to update: every action is at its latest release.');
+  }
+  if (unresolved > 0 && !spec) {
+    logger.warn(`${unresolved} action(s) could not be updated.`);
+  }
+
+  if (changes > 0) {
+    // Keep a committed lockfile in step with the workflows.
+    const lock = findLockfile(process.cwd());
+    if (lock?.kind === 'secureci') {
+      await runInventory(files, { updateLock: true });
+    } else if (lock?.kind === 'github') {
+      logger.warn(
+        `${GITHUB_LOCKFILE} is GitHub's lockfile and SecureCI doesn't write it: run \`gh actions-lock\` to update it.`
+      );
+    }
+  }
+  if (unreadable) process.exit(1);
 }
 
 async function validateOneFile(

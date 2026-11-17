@@ -129,7 +129,8 @@ function normalizeName(name: string): string {
   ].join('/');
 }
 
-interface Edit {
+/** A replacement of `content.slice(start, end)` with `text`. */
+export interface Edit {
   start: number;
   end: number;
   text: string;
@@ -221,13 +222,18 @@ export async function pinContent(
     result.changes.push({ line, uses, ref, sha, pinned });
   }
 
-  result.content = edits
+  result.content = applyEdits(content, edits);
+  return result;
+}
+
+/** `content` with every (non-overlapping) edit applied. */
+export function applyEdits(content: string, edits: Edit[]): string {
+  return [...edits]
     .sort((a, b) => b.start - a.start)
     .reduce(
       (text, e) => text.slice(0, e.start) + e.text + text.slice(e.end),
       content
     );
-  return result;
 }
 
 /**
@@ -235,7 +241,11 @@ export async function pinContent(
  * on: an old version comment is replaced, any other comment kept after
  * the ref, and with no comment one is added at the end of the line.
  */
-function commentEdit(content: string, valueEnd: number, ref: string): Edit {
+export function commentEdit(
+  content: string,
+  valueEnd: number,
+  ref: string
+): Edit {
   let lineEnd = content.indexOf('\n', valueEnd);
   if (lineEnd === -1) lineEnd = content.length;
   if (content[lineEnd - 1] === '\r') lineEnd--;

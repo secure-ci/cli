@@ -1710,6 +1710,176 @@ describe('secureci commands', () => {
     }
   });
 
+  it('update moves an action to a tag or its latest release, re-pinning and refreshing secureci.lock', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'secureci-update-cli-'));
+    const work = path.join(dir, 'work');
+    const wfDir = path.join(work, '.github', 'workflows');
+    fs.mkdirSync(wfDir, { recursive: true });
+    // Fake GitHub: bare repositories under file://<dir>/server/<owner>/<repo>.git
+    const server = path.join(dir, 'server');
+    const git = (cwd: string, ...args: string[]) =>
+      execFileSync('git', args, { cwd, encoding: 'utf-8' }).trim();
+    const makeRepo = (name: string, tags: string[]): Record<string, string> => {
+      const src = path.join(dir, 'src', name);
+      fs.mkdirSync(src, { recursive: true });
+      git(src, 'init', '-q', '-b', 'main');
+      const shas: Record<string, string> = {};
+      for (const tag of tags) {
+        fs.writeFileSync(path.join(src, 'f'), tag);
+        git(src, 'add', 'f');
+        git(
+          src,
+          '-c',
+          'user.name=t',
+          '-c',
+          'user.email=t@t',
+          'commit',
+          '-q',
+          '-m',
+          tag
+        );
+        git(src, 'tag', tag);
+        shas[tag] = git(src, 'rev-parse', 'HEAD');
+      }
+      const bare = path.join(server, `${name}.git`);
+      fs.mkdirSync(path.dirname(bare), { recursive: true });
+      git(dir, 'clone', '-q', '--bare', src, bare);
+      return shas;
+    };
+    const checkout = makeRepo('actions/checkout', [
+      'v4',
+      'v6.0.0',
+      'v7.0.1',
+      'v7',
+      'v8.0.0-beta.1'
+    ]);
+    const codeql = makeRepo('github/codeql-action', ['v3.1.0', 'v3']);
+    // No version tags: --all leaves it alone.
+    makeRepo('org/rolling', ['nightly']);
+
+    const wf = path.join(wfDir, 'ci.yml');
+    const original = [
+      'name: CI',
+      'on: push',
+      'jobs:',
+      '  a:',
+      '    runs-on: ubuntu-latest',
+      '    steps:',
+      `      - uses: actions/checkout@${checkout.v4} # v4`,
+      '      - uses: github/codeql-action/init@v3',
+      '      - uses: github/codeql-action/analyze@v3',
+      '      - uses: org/rolling@main',
+      ''
+    ].join('\n');
+    fs.writeFileSync(wf, original);
+    const env = {
+      ...process.env,
+      HOME: path.join(dir, 'home'),
+      GITHUB_SERVER_URL: `file://${server}`,
+      GITHUB_TOKEN: '',
+      GH_TOKEN: '',
+      GH_CONFIG_DIR: path.join(dir, 'gh')
+    };
+    // stdout and stderr, also on success (warnings go to stderr).
+    const update = (...args: string[]) => {
+      const r = spawnSync('node', [cliPath, 'update', ...args], {
+        cwd: work,
+        env,
+        encoding: 'utf-8'
+      });
+      return { status: r.status, out: r.stdout + r.stderr };
+    };
+
+    try {
+      // Nothing named: an error, not a no-op.
+      expect(update().status).not.toBe(0);
+      const local = update('./.github/actions/x');
+      expect(local.status).not.toBe(0);
+      expect(local.out).toContain('is not an action reference');
+      // An action the workflows don't use fails, changing nothing.
+      const unused = update('actions/setup-node@v4');
+      expect(unused.status).not.toBe(0);
+      expect(unused.out).toContain('actions/setup-node is not used');
+      // A ref that doesn't exist fails, changing nothing.
+      const missing = update('actions/checkout@v99');
+      expect(missing.status).not.toBe(0);
+      expect(missing.out).toContain(
+        'actions/checkout@v99 could not be resolved'
+      );
+      expect(fs.readFileSync(wf, 'utf-8')).toBe(original);
+
+      // The exact tag asked for, pinned to its commit.
+      const exact = update('actions/checkout@v6.0.0');
+      expect(exact.status).toBe(0);
+      expect(exact.out).toContain(
+        `.github/workflows/ci.yml:7 actions/checkout@${checkout.v4} -> ${checkout['v6.0.0'].slice(0, 12)} (v6.0.0)`
+      );
+      expect(fs.readFileSync(wf, 'utf-8')).toContain(
+        `      - uses: actions/checkout@${checkout['v6.0.0']} # v6.0.0\n`
+      );
+      // No secureci.lock to keep in step: none is created.
+      expect(fs.existsSync(path.join(work, 'secureci.lock'))).toBe(false);
+
+      // A major tag resolves to what it points at, keeping `# v7`.
+      expect(update('actions/checkout@v7', wf).status).toBe(0);
+      expect(fs.readFileSync(wf, 'utf-8')).toContain(
+        `      - uses: actions/checkout@${checkout.v7} # v7\n`
+      );
+
+      // No version: the latest stable release (pre-releases ignored).
+      // owner/repo moves every path of the repository; tag refs get pinned.
+      fs.writeFileSync(
+        path.join(work, 'secureci.lock'),
+        '{"version":2,"actions":{}}\n'
+      );
+      expect(update('github/codeql-action').status).toBe(0);
+      const updated = fs.readFileSync(wf, 'utf-8');
+      expect(updated).toContain(
+        `      - uses: github/codeql-action/init@${codeql['v3.1.0']} # v3.1.0\n`
+      );
+      expect(updated).toContain(
+        `      - uses: github/codeql-action/analyze@${codeql['v3.1.0']} # v3.1.0\n`
+      );
+      // An existing secureci.lock is rewritten from the updated workflows.
+      const lock = JSON.parse(
+        fs.readFileSync(path.join(work, 'secureci.lock'), 'utf-8')
+      );
+      expect(Object.keys(lock.actions)).toContain(
+        `github/codeql-action/init@${codeql['v3.1.0']}`
+      );
+
+      // Running it again changes nothing.
+      const again = update('github/codeql-action');
+      expect(again.status).toBe(0);
+      expect(again.out).toContain('already at v3.1.0');
+
+      // --all: every remote action to its latest release.
+      const all = update('--all');
+      expect(all.status).toBe(0);
+      expect(fs.readFileSync(wf, 'utf-8')).toContain(
+        `      - uses: actions/checkout@${checkout['v7.0.1']} # v7.0.1\n`
+      );
+      expect(all.out).toContain('Updated 1 reference(s) in 1 file(s)');
+      expect(all.out).toContain(
+        'org/rolling: no release found (no version tags)'
+      );
+      expect(all.out).toContain('1 action(s) could not be updated');
+      expect(fs.readFileSync(wf, 'utf-8')).toContain(
+        '      - uses: org/rolling@main\n'
+      );
+
+      // Only GitHub's actions.lock: not written, but flagged.
+      fs.rmSync(path.join(work, 'secureci.lock'));
+      fs.writeFileSync(path.join(wfDir, 'actions.lock'), 'version: v0.0.3\n');
+      const gh = update('actions/checkout@v6.0.0');
+      expect(gh.status).toBe(0);
+      expect(gh.out).toContain('gh actions-lock');
+      expect(fs.existsSync(path.join(work, 'secureci.lock'))).toBe(false);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it('pin resolves tags over the network (here a fake GitHub API)', async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'secureci-pin-net-'));
     const wfDir = path.join(dir, '.github', 'workflows');

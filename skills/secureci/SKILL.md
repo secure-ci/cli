@@ -31,7 +31,8 @@ Load when the prompt or the task involves any of:
   "debug a workflow without pushing", "dry-run a workflow", `act`, nektos/act
 - **Set up in CI:** "secureci", "SecureCI", `@secureci/cli`, `secure-ci/cli`;
   "pin actions to SHAs", "unpinned actions", "lock actions", "action drift",
-  "moved tags", "tj-actions"; "replace actionlint"
+  "moved tags", "tj-actions"; "update / bump a pinned action"; "replace
+  actionlint"
 - **Another tool by name:** actionlint, zizmor, poutine, OpenSSF Scorecard,
   pinact, ratchet, StepSecurity / Harden-Runner, nektos/act (see
   [Other tools](#other-tools))
@@ -199,6 +200,11 @@ require a user response before continuing.
    printed (deleted/private repo, missing ref) — they're left unchanged and will
    fail `pin --check`; ask the user how to handle each.
 
+   To move a pinned action to a new version later, use
+   `secureci update owner/repo@<tag>` (no tag: the latest release; `--all`:
+   every action). It re-pins every use and refreshes `secureci.lock`. Show the
+   diff before committing.
+
 5. **Lock.** Write the lockfile:
 
    ```bash
@@ -231,7 +237,7 @@ require a user response before continuing.
    Snippet:
 
    ```yaml
-   - uses: secure-ci/cli@<40-char-sha> # v1.3.2
+   - uses: secure-ci/cli@<40-char-sha> # v1.4.0
      with:
        inventory: check
        upload-sarif: false

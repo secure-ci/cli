@@ -31,6 +31,7 @@ introduction and install steps, see the [README](README.md).
   - [Drift against `secureci.lock`](#drift-against-securecilock)
   - [GitHub's `actions.lock`](#githubs-actionslock)
 - [Pin actions to commit SHAs (`secureci pin`)](#pin-actions-to-commit-shas-secureci-pin)
+- [Update pinned actions (`secureci update`)](#update-pinned-actions-secureci-update)
 - [Known security advisories](#known-security-advisories)
 - [Use in CI (GitHub Action)](#use-in-ci-github-action)
   - [Generate the workflow (`secureci init workflow`)](#generate-the-workflow-secureci-init-workflow)
@@ -85,6 +86,11 @@ secureci inventory --check         # compare against ./secureci.lock, fail on dr
 # Pin action tags to commit SHAs in place (owner/repo@<sha> # v4)
 secureci pin                       # every workflow, plus the local actions they use
 secureci pin --check               # fail if anything would change (for CI)
+
+# Move an action to a new version, re-pinned to its commit SHA (owner/repo@<sha> # v7.0.1)
+secureci update actions/checkout@v7.0.1  # every workflow that uses it
+secureci update actions/checkout         # its latest release
+secureci update --all                    # every action to its latest release
 
 # Scan every repository in an organisation, for a SecureCI supply-chain assessment
 secureci org scan my-org           # JSON results + secureci-org-scan-my-org.tar.gz
@@ -734,6 +740,37 @@ Each change is printed as `file:line owner/repo@v4 -> <sha12> (v4)`, followed by
 - **`--check`** writes nothing and exits non-zero if any reference would be pinned or can't be resolved. Use it in CI to keep workflows pinned.
 - **`--update-lock`** runs [`inventory --update-lock`](#drift-against-securecilock) on the same files after pinning (with file arguments, the other workflows' entries are kept), so `secureci.lock` records the new `owner/repo@<sha>` references. It can't be combined with `--check`.
 
+## Update pinned actions (`secureci update`)
+
+Moving a SHA-pinned action to a new version by hand means looking up the new tag's commit and editing every workflow that uses it. `secureci update` does that in one step (1.4.0 or later). It finds every reference to the action, whether pinned to a SHA or still on a tag or branch, and rewrites it to the new version's commit, with the version in a trailing comment:
+
+```yaml
+- uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+# secureci update actions/checkout@v7.0.1 turns it into
+- uses: actions/checkout@<commit of v7.0.1> # v7.0.1
+```
+
+```bash
+secureci update actions/checkout@v7.0.1        # every workflow, plus the local actions and reusable workflows they use
+secureci update actions/checkout@v7.0.1 .github/workflows/ci.yml  # just this file
+secureci update actions/checkout@v7            # a major tag: the commit v7 points at now, kept as `# v7`
+secureci update actions/checkout               # the latest release
+secureci update github/codeql-action/init@v3   # only this path of the repository
+secureci update --all                          # every remote action to its latest release
+secureci update --all .github/workflows/ci.yml # every remote action in this file
+```
+
+Each change is printed as `file:line <old reference> -> <sha12> (v7.0.1)`, followed by a count.
+
+- **The ref is used as given.** `@v7.0.1` pins `v7.0.1`'s commit and writes `# v7.0.1`. `@v7` pins the commit `v7` points at now, the one a GitHub runner would run for `@v7`, and writes `# v7`. A tag wins over a branch of the same name, as with `pin`.
+- **Without a ref, the latest release is used:** the highest stable version tag (`v1.2.3`, `1.2`, `v2`) of the repository. Pre-releases (`v8.0.0-beta.1`) and tags that aren't versions (`latest`, `nightly`) are ignored. When a major tag and a full version name the same release (`v4`, `v4.2.2`), the full one wins.
+- **`owner/repo` covers every path in the repository**, so actions published from one repository move together (`github/codeql-action/init` and `github/codeql-action/analyze`, or a reusable workflow `org/repo/.github/workflows/x.yml`). `owner/repo/path` updates only that path. Names are matched case-insensitively for owner and repo.
+- **`--all`** updates every remote action the files use to its latest release, one repository at a time. A repository with no version tags (one used on `@main`, say) or one that can't be read is reported and left unchanged, and the rest are still updated. Every argument is then a file. Note that it also moves an action used on a branch to its latest release tag.
+- **What is left alone:** local (`./`) and `docker://` references, other actions, and references already at the target commit with the right comment. Running it again changes nothing. Formatting and comments are kept as with [`pin`](#pin-actions-to-commit-shas-secureci-pin). A reference written as a YAML block scalar is reported and not changed.
+- **Failures:** naming an action no file uses, or a ref that can't be resolved, is an error, and nothing is changed. A file that can't be read is reported and the command exits non-zero after updating the rest.
+- **Resolution:** a ref is resolved like `pin` resolves it (`git ls-remote`, or the GitHub API when a token is available). The latest release comes from the repository's tags, listed with `git ls-remote --tags`. It needs the network: there is no `--offline`.
+- **Lockfiles:** when `secureci.lock` exists, it is rewritten from the updated workflows afterwards, as [`inventory --update-lock`](#drift-against-securecilock) would, so it stays in step. Review and commit both. No lock is created when there is none. When the only lockfile is GitHub's `.github/workflows/actions.lock`, SecureCI doesn't write it and prints a reminder to run `gh actions-lock`.
+
 ## Known security advisories
 
 `secureci inventory` and `secureci validate` check the actions a workflow uses against the [GitHub Advisory Database](https://github.com/advisories?query=ecosystem%3Aactions) and report published vulnerabilities, such as [GHSA-mrrh-fwg8-r2c3](https://github.com/advisories/GHSA-mrrh-fwg8-r2c3) in `tj-actions/changed-files` before 46.0.1.
@@ -775,7 +812,7 @@ jobs:
       security-events: write # upload SARIF to code scanning
     steps:
       - uses: actions/checkout@v4
-      - uses: secure-ci/cli@v1.3.2 # a release tag; see below
+      - uses: secure-ci/cli@v1.4.0 # a release tag; see below
         with:
           # all inputs are optional
           contract: contracts/platform-standard.yml
@@ -787,7 +824,7 @@ jobs:
 
 The job fails if any workflow is invalid or violates the contract. Inputs: `files`, `contract`, `contract-recurse`, `format`, `output`, `upload-sarif`, `inventory` (`check` to also run `secureci inventory --check` against `secureci.lock`, or GitHub's `actions.lock` when that is the only lockfile), `version` (which `@secureci/cli` to run), and `github-token`.
 
-Reference the action by a [release tag](https://github.com/secure-ci/cli/releases) such as `v1.3.2`. There is no moving major tag (`@v1`, `@v0`), so a ref like that won't resolve. `secureci init workflow` fills in the tag matching your installed CLI. The action runs [`@secureci/cli`](https://www.npmjs.com/package/@secureci/cli) from npm via `npx`; by default it runs the CLI release matching the action's tag; set the `version` input to run another one.
+Reference the action by a [release tag](https://github.com/secure-ci/cli/releases) such as `v1.4.0`. There is no moving major tag (`@v1`, `@v0`), so a ref like that won't resolve. `secureci init workflow` fills in the tag matching your installed CLI. The action runs [`@secureci/cli`](https://www.npmjs.com/package/@secureci/cli) from npm via `npx`; by default it runs the CLI release matching the action's tag; set the `version` input to run another one.
 
 ### Generate the workflow (`secureci init workflow`)
 
@@ -821,7 +858,7 @@ Auditors and assessors increasingly treat the CI pipeline as part of the softwar
 To keep a report per run, turn on the action's drift check and upload the report as a build artifact:
 
 ```yaml
-- uses: secure-ci/cli@v1.3.2 # writes secureci-results.sarif
+- uses: secure-ci/cli@v1.4.0 # writes secureci-results.sarif
   with:
     contract: contracts/standard.yml
     inventory: check # fail on drift against the committed secureci.lock

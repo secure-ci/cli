@@ -1,6 +1,6 @@
 {
   "name": "@secureci/cli",
-  "version": "1.3.2",
+  "version": "1.4.0",
   "description": "SecureCI: validate, check against pipeline standards, and run GitHub Actions workflows locally",
   "main": "dist/index.js",
   "bin": {
