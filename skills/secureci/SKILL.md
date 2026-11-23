@@ -89,7 +89,7 @@ you touched.
 3. **Lock.** Only if `secureci.lock` exists, run `secureci inventory --check`.
    An action you added or bumped shows as new or moved: show what changed, then
    on a yes run `secureci inventory --update-lock` with **no file arguments**.
-   Before 1.0.1, file arguments made it (and `pin --update-lock <file>`)
+   Up to v1.0.0, file arguments made it (and `pin --update-lock <file>`)
    rebuild the lock from those files alone, dropping every other workflow's
    entries; without them it is safe on every version. **[wait for user]**
 
