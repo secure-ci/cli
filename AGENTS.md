@@ -65,12 +65,15 @@ must be reflected in the docs **and** on the website, in the same piece of work:
 - **This repo, same PR:** [DOCS.md](DOCS.md) (the reference), and
   [README.md](README.md) when it's headline-level (overview, limitations,
   install). Internal design changes go in the relevant `.github/agents/*` doc.
+- **Mark the release:** new or changed behavior gets "(since vX.Y.Z)" for the
+  release it ships in; old behavior it replaces is "up to vP.Q.R", the release
+  before it (e.g. "(since v1.2.0; up to v1.1.0 they were only noted)"). DOCS.md
+  is the source of truth for these markers.
 - **[secure-ci/website](https://github.com/secure-ci/website), a companion PR:**
   `docs.html` (generated from this repo's README.md and DOCS.md, so mirror the
-  same wording; mark new behavior "CLI x.y.z or later" for the release it ships
-  in), `llms.txt`, and any page that describes the changed behavior (e.g.
-  `compare/`, `index.html`, `compliance.html`; bump `sitemap.xml` `lastmod` for
-  pages you change).
+  same wording and markers), `llms.txt`, and any page that describes the
+  changed behavior (e.g. `compare/`, `index.html`, `compliance.html`; bump
+  `sitemap.xml` `lastmod` for pages you change).
 - **Link the two PRs** to each other. A CLI PR isn't done while the site still
   describes the old behavior.
 

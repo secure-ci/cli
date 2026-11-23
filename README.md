@@ -217,7 +217,8 @@ in the job reuses it, so tools and files from earlier steps persist.
   config.
 - **Profiles** (`secureci.yml`, `--profile dev`) — swap a private self-hosted
   `runs-on`, job container image or service image for ones you can reach, plus
-  per-profile env, vars and settings, without editing the workflow.
+  per-profile env, vars and settings, without editing the workflow (since
+  v1.3.0).
 - **Service containers** (`jobs.<id>.services`) — databases, caches and other
   sidecars start before the job, join its network (reachable by hostname like
   `postgres:5432`), wait for health checks, and are torn down with the job.
