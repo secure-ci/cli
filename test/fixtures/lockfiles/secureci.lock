@@ -1,0 +1,15 @@
+{
+  "version": 2,
+  "actions": {
+    "actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd": {
+      "commit": "93cb6efe18208431cddfb8368fd83d5badbf9bfd",
+      "owner_id": 44036562,
+      "repo_id": 197814629
+    },
+    "actions/setup-node@2028fbc5c25fe9cf00d9f06a71cc4710d4507903": {
+      "commit": "2028fbc5c25fe9cf00d9f06a71cc4710d4507903",
+      "owner_id": 44036562,
+      "repo_id": 197814850
+    }
+  }
+}

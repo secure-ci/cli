@@ -703,9 +703,10 @@ The lockfile is plain JSON, safe to commit and diff:
 
 ### GitHub's `actions.lock`
 
-GitHub's [workflow dependency lockfiles](https://docs.github.com/actions/concepts/security/workflow-dependency-lockfiles) (public preview, GitHub.com only) live at `.github/workflows/actions.lock` and are maintained by [`gh actions-lock`](https://github.com/github/gh-actions-lock). SecureCI reads them too (since v0.3.0):
+GitHub's [workflow dependency lockfiles](https://docs.github.com/actions/concepts/security/workflow-dependency-lockfiles) ([generally available](https://github.blog/changelog/2026-10-28-github-actions-workflow-lockfiles-are-generally-available) since October 2026 on GitHub.com and GitHub Enterprise Cloud, including `*.ghe.com`; not on GitHub Enterprise Server) live at `.github/workflows/actions.lock` and are maintained by [`gh actions-lock`](https://github.com/github/gh-actions-lock). SecureCI reads them too (since v0.3.0):
 
-- **`secureci.lock` comes first.** If it exists, SecureCI checks against it and ignores `actions.lock`.
+- **`secureci.lock` comes first.** If it exists, SecureCI checks drift against it, not against `actions.lock`.
+- **With both, they must agree** (since v1.5.0). The runner enforces `actions.lock` while `--check` verifies `secureci.lock`, so when both exist bare `secureci inventory` and `--check` also compare the two files: an action in both, locked at a different commit or (where both record it) a different `owner_id` or `repo_id`, is an error naming each side, and the check fails. This only reads the files, so it works with `--offline` too. `--update-lock` still writes `secureci.lock` but warns about any disagreement. To fix one, run `gh actions-lock --relock` or `secureci inventory --update-lock` so both record the commit you trust. Entries in only one file aren't compared, since `gh actions-lock` can narrow refs (`v4` to `v4.2.1`) and records dependencies SecureCI doesn't follow. An `actions.lock` SecureCI can't read is a warning here. SecureCI never runs `gh actions-lock` or writes `actions.lock`. Up to v1.4.0, `actions.lock` was ignored when `secureci.lock` existed.
 - **Otherwise, `actions.lock` is used.** Bare `secureci inventory` and `--check` compare each action's commit against `actions.lock` instead of creating `secureci.lock`. A moved ref or an action missing from the file fails, with a hint to run `gh actions-lock`.
 - **`--update-lock` always writes `secureci.lock`.** Use it to switch a repository to SecureCI's lockfile, for example on GitHub Enterprise Server, where `actions.lock` isn't available.
 
@@ -1156,7 +1157,7 @@ src/
 ├── config.ts                 # ~/.secureci/config.yml
 ├── report.ts                 # --format text/json/sarif rendering
 ├── inventory.ts              # `secureci inventory`: action inventory, secureci.lock drift
-├── github-lockfile.ts        # Read GitHub's .github/workflows/actions.lock
+├── github-lockfile.ts        # Read GitHub's .github/workflows/actions.lock; compare it with secureci.lock
 ├── pin.ts                    # `secureci pin`: rewrite uses: tags to commit SHAs
 ├── advisories.ts             # GitHub Advisory Database lookups, version ranges, cache
 ├── contract-source.ts        # --contract from a path or owner/repo/path@ref

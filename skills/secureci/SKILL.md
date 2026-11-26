@@ -214,6 +214,9 @@ require a user response before continuing.
    - If only GitHub's `.github/workflows/actions.lock` exists, ask first:
      SecureCI checks against it when there's no `secureci.lock`;
      `--update-lock` switches the repo to `secureci.lock`. **[wait for user]**
+     If the user keeps both, they must pin the same commits: `inventory
+--check` fails on any disagreement. After updating one, refresh the
+     other (`gh actions-lock --relock`).
    - Confirm `secureci.lock` is at the repo root and **not** gitignored
      (`git check-ignore secureci.lock` prints nothing).
    - Run `secureci inventory --check` — must pass.
@@ -237,7 +240,7 @@ require a user response before continuing.
    Snippet:
 
    ```yaml
-   - uses: secure-ci/cli@<40-char-sha> # v1.4.0
+   - uses: secure-ci/cli@<40-char-sha> # v1.5.0
      with:
        inventory: check
        upload-sarif: false
@@ -300,18 +303,19 @@ Tell the user, in one short list:
 
 ## Edge cases
 
-| Situation                                       | Action                                                                                                                                   |
-| ----------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
-| No workflow files                               | Stop at step 2; suggest `secureci init workflow`.                                                                                        |
-| SecureCI already wired                          | Don't duplicate; offer only missing pin / lock / `inventory: check`.                                                                     |
-| `actionlint` wired via a reusable/composite ref | Replace that step with the SecureCI step; leave the upstream action's repo alone.                                                        |
-| Target job is a reusable-workflow caller        | It has no `steps:`; pick another job or suggest `secureci init workflow`.                                                                |
-| Non-Linux runner only                           | The action is bash + `npx`; prefer an `ubuntu-*` job, or add a small one.                                                                |
-| Rate-limited during `pin` / `inventory`         | Set `GITHUB_TOKEN` / `GH_TOKEN` or `gh auth login`, then retry.                                                                          |
-| No network                                      | `pin --check` can't resolve tags and fails. Add `--offline` (action cache only) to `validate` / `pin` and say which refs went unchecked. |
-| `pin` reports unresolvable refs                 | Left unchanged; `pin --check` fails. Ask the user to fix or remove each ref.                                                             |
-| Only `.github/workflows/actions.lock` exists    | Ask before `--update-lock` (it switches to `secureci.lock`). Without it, `inventory: check` checks against `actions.lock`.               |
-| Org owns actions it wants on tags               | Use a contract with `pins.allow`, then `secureci pin --contract <file>`; see DOCS.md "Supply-chain pinning".                             |
+| Situation                                          | Action                                                                                                                                   |
+| -------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| No workflow files                                  | Stop at step 2; suggest `secureci init workflow`.                                                                                        |
+| SecureCI already wired                             | Don't duplicate; offer only missing pin / lock / `inventory: check`.                                                                     |
+| `actionlint` wired via a reusable/composite ref    | Replace that step with the SecureCI step; leave the upstream action's repo alone.                                                        |
+| Target job is a reusable-workflow caller           | It has no `steps:`; pick another job or suggest `secureci init workflow`.                                                                |
+| Non-Linux runner only                              | The action is bash + `npx`; prefer an `ubuntu-*` job, or add a small one.                                                                |
+| Rate-limited during `pin` / `inventory`            | Set `GITHUB_TOKEN` / `GH_TOKEN` or `gh auth login`, then retry.                                                                          |
+| No network                                         | `pin --check` can't resolve tags and fails. Add `--offline` (action cache only) to `validate` / `pin` and say which refs went unchecked. |
+| `pin` reports unresolvable refs                    | Left unchanged; `pin --check` fails. Ask the user to fix or remove each ref.                                                             |
+| Only `.github/workflows/actions.lock` exists       | Ask before `--update-lock` (it switches to `secureci.lock`). Without it, `inventory: check` checks against `actions.lock`.               |
+| Both lockfiles exist, `--check` says they disagree | Ask which commit to trust, then run `gh actions-lock --relock` or `secureci inventory --update-lock` so both match.                      |
+| Org owns actions it wants on tags                  | Use a contract with `pins.allow`, then `secureci pin --contract <file>`; see DOCS.md "Supply-chain pinning".                             |
 
 ## Reference
 
