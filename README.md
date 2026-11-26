@@ -1,7 +1,7 @@
 # SecureCI
 
 [![CI](https://github.com/secure-ci/cli/actions/workflows/ci.yaml/badge.svg)](https://github.com/secure-ci/cli/actions/workflows/ci.yaml)
-[![Socket Badge](https://badge.socket.dev/npm/package/@secureci/cli)](https://socket.dev/npm/package/@secureci/cli)
+[![Socket Badge](https://badge.socket.dev/npm/package/@secureci/cli/latest)](https://badge.socket.dev/npm/package/@secureci/cli/latest)
 
 Test and vet your GitHub Actions **before you push**.
 
