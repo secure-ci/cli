@@ -28,7 +28,7 @@ src/
 ├── project-config.ts      # Repo secureci.yml / package.json "secureci", profiles, precedence
 ├── report.ts              # --format text/json/sarif rendering
 ├── inventory.ts           # Action inventory + lockfile drift
-├── github-lockfile.ts     # Read GitHub's .github/workflows/actions.lock
+├── github-lockfile.ts     # Read GitHub's .github/workflows/actions.lock; compare it with secureci.lock
 ├── contract-source.ts     # --contract from a path or owner/repo/path@ref
 ├── pin.ts                 # `secureci pin`: rewrite uses: tags to commit SHAs in place
 ├── update.ts              # `secureci update`: move an action to a version, re-pinned (reuses pin.ts edits)

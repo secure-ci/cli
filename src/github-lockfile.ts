@@ -156,3 +156,49 @@ export function readLockfile(source: LockSource): Lockfile {
     ? parseGitHubLockfile(text)
     : parseSecureciLockfile(text);
 }
+
+/** A reference both lockfiles record, but differently. */
+export interface LockMismatch {
+  uses: string;
+  field: 'commit' | 'owner_id' | 'repo_id';
+  secureci: string | number;
+  github: string | number;
+}
+
+/**
+ * Where `secureci.lock` and GitHub's `actions.lock` disagree: a reference
+ * in both, locked at a different commit or (where both record it) a
+ * different repository. References in only one file aren't compared:
+ * `gh actions-lock` narrows refs and records dependencies SecureCI doesn't
+ * follow.
+ */
+export function compareLockfiles(
+  secureci: Record<string, LockEntry>,
+  github: Record<string, LockEntry>
+): LockMismatch[] {
+  const found: LockMismatch[] = [];
+  for (const uses of Object.keys(secureci).sort()) {
+    const ours = secureci[uses];
+    const theirs = github[uses];
+    if (!theirs) continue;
+    if (ours.commit !== theirs.commit) {
+      found.push({
+        uses,
+        field: 'commit',
+        secureci: ours.commit,
+        github: theirs.commit
+      });
+    }
+    for (const [field, key] of [
+      ['owner_id', 'ownerId'],
+      ['repo_id', 'repoId']
+    ] as const) {
+      const a = ours[key];
+      const b = theirs[key];
+      if (a !== undefined && b !== undefined && a !== b) {
+        found.push({ uses, field, secureci: a, github: b });
+      }
+    }
+  }
+  return found;
+}

@@ -1148,6 +1148,86 @@ describe('secureci commands', () => {
     fs.rmSync(dir, { recursive: true, force: true });
   });
 
+  it('inventory fails when secureci.lock and actions.lock disagree', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'secureci-bothlock-'));
+    const wfDir = path.join(dir, '.github', 'workflows');
+    fs.mkdirSync(wfDir, { recursive: true });
+    const wf = path.join(wfDir, 'ci.yml');
+    const scan = 'org/scan@' + '1'.repeat(40);
+    fs.writeFileSync(
+      wf,
+      [
+        'name: CI',
+        'on: push',
+        'jobs:',
+        '  a:',
+        '    runs-on: ubuntu-latest',
+        '    steps:',
+        `      - uses: ${scan}`
+      ].join('\n')
+    );
+    const ghLock = path.join(wfDir, 'actions.lock');
+    const writeGhLock = (sha: string) =>
+      fs.writeFileSync(
+        ghLock,
+        [
+          "version: 'v0.0.3'",
+          'dependencies:',
+          `  '${scan}':`,
+          "    ref: 'v1'",
+          `    commit: 'sha1-${sha}'`,
+          '    owner_id: 1',
+          '    repo_id: 1'
+        ].join('\n')
+      );
+    const out = (r: { stdout: string; stderr: string }) => r.stdout + r.stderr;
+    // spawnSync: `run` drops stderr (the warnings) when the command succeeds.
+    const runAll = (args: string[]) => {
+      const r = spawnSync('node', [cliPath, ...args], {
+        cwd: dir,
+        encoding: 'utf-8'
+      });
+      return { status: r.status, stdout: r.stdout, stderr: r.stderr };
+    };
+
+    // Both lockfiles pin the action at the same commit: the check passes.
+    writeGhLock('1'.repeat(40));
+    expect(
+      run(['inventory', wf, '--offline', '--update-lock'], dir).status
+    ).toBe(0);
+    const ok = run(['inventory', wf, '--offline', '--check'], dir);
+    expect(ok.status).toBe(0);
+    expect(out(ok)).toContain('secureci.lock and actions.lock agree');
+
+    // actions.lock pins another commit: --check and bare inventory fail,
+    // even though secureci.lock matches the workflow (and offline).
+    writeGhLock('9'.repeat(40));
+    for (const args of [
+      ['inventory', wf, '--offline', '--check'],
+      ['inventory', wf, '--offline']
+    ]) {
+      const r = run(args, dir);
+      expect(r.status).not.toBe(0);
+      expect(out(r)).toContain(
+        `Lockfiles disagree: ${scan} commit is 111111111111 in secureci.lock but 999999999999 in actions.lock`
+      );
+      expect(out(r)).toContain('gh actions-lock');
+    }
+
+    // --update-lock still writes secureci.lock, but warns.
+    const update = runAll(['inventory', wf, '--offline', '--update-lock']);
+    expect(update.status).toBe(0);
+    expect(out(update)).toContain('Lockfiles disagree');
+
+    // An actions.lock SecureCI can't read is a warning, not a failure.
+    fs.writeFileSync(ghLock, "version: 'v9.9.9'\ndependencies: {}\n");
+    const unreadable = runAll(['inventory', wf, '--offline', '--check']);
+    expect(unreadable.status).toBe(0);
+    expect(out(unreadable)).toContain('Could not compare with actions.lock');
+
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
   it("inventory --update-lock with files keeps the other workflows' entries", () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'secureci-merge-cli-'));
     const wfDir = path.join(dir, '.github', 'workflows');

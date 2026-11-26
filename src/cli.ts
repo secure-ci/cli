@@ -66,6 +66,7 @@ import {
 } from './inventory';
 import {
   GITHUB_LOCKFILE,
+  compareLockfiles,
   findLockfile,
   readLockfile,
   serializeSecureciLockfile
@@ -645,6 +646,40 @@ async function workflowUses(
   return uses;
 }
 
+/**
+ * When the repository also has GitHub's actions.lock, report where it
+ * disagrees with these secureci.lock entries (the runner enforces one, CI
+ * checks the other). Returns the number of disagreements; an actions.lock
+ * that can't be read is a warning, not a disagreement.
+ */
+function crossCheckGitHubLockfile(
+  secureci: Record<string, LockEntry>,
+  report: (message: string) => void
+): number {
+  const file = path.join(process.cwd(), GITHUB_LOCKFILE);
+  if (!fs.existsSync(file)) return 0;
+  let github: Lockfile;
+  try {
+    github = readLockfile({ kind: 'github', file });
+  } catch (error) {
+    logger.warn(
+      `Could not compare with actions.lock: ${error instanceof Error ? error.message : 'Unknown error'}`
+    );
+    return 0;
+  }
+  const mismatches = compareLockfiles(secureci, github.actions);
+  for (const m of mismatches) {
+    const show = (v: string | number) =>
+      typeof v === 'string' ? v.slice(0, 12) : String(v);
+    report(
+      `Lockfiles disagree: ${m.uses} ${m.field} is ${show(m.secureci)} in ${LOCKFILE_NAME} but ${show(m.github)} in actions.lock`
+    );
+  }
+  return mismatches.length;
+}
+
+const LOCKFILES_DISAGREE_HINT = `Make both record the commit you trust: run \`gh actions-lock --relock\` to update actions.lock, or \`secureci inventory --update-lock\` to update ${LOCKFILE_NAME}.`;
+
 async function runInventory(
   files: string[],
   options: {
@@ -910,6 +945,9 @@ async function runInventory(
       }
     }
     fs.writeFileSync(lockPath, serializeSecureciLockfile(entries));
+    if (crossCheckGitHubLockfile(entries, (m) => logger.warn(m)) > 0) {
+      logger.warn(LOCKFILES_DISAGREE_HINT);
+    }
     const transitive = Object.values(entries).filter((e) => e.via).length;
     logger.success(
       `Wrote ${Object.keys(entries).length} action(s) to ${LOCKFILE_NAME}` +
@@ -959,6 +997,15 @@ async function runInventory(
     );
   }
   diff.added.forEach((u) => logger.warn(`New action not in ${lockName}: ${u}`));
+  // With both lockfiles, they must pin the same commits (offline too: this
+  // only reads the files).
+  const bothLockfiles =
+    !github && fs.existsSync(path.join(process.cwd(), GITHUB_LOCKFILE));
+  const disagreements = github
+    ? 0
+    : crossCheckGitHubLockfile((lock as Lockfile).actions, (m) =>
+        logger.error(m)
+      );
   // actions.lock is written by `gh actions-lock`, which may record entries
   // SecureCI doesn't follow, so "no longer used" is only for secureci.lock.
   // A reference still in use but unresolved isn't "no longer used".
@@ -990,7 +1037,16 @@ async function runInventory(
     logger.warn(`New actions are not yet in ${lockName} (${fixHint}).`);
     process.exit(1);
   }
+  if (disagreements > 0) {
+    logger.error(
+      `${LOCKFILE_NAME} and actions.lock pin different code: the runner enforces actions.lock. ${LOCKFILES_DISAGREE_HINT}`
+    );
+    process.exit(1);
+  }
   logger.success(`No action drift against ${lockName}.`);
+  if (bothLockfiles) {
+    logger.success(`${LOCKFILE_NAME} and actions.lock agree.`);
+  }
 }
 
 async function runPin(

@@ -4,6 +4,7 @@ import * as os from 'os';
 import * as path from 'path';
 import {
   GITHUB_LOCKFILE,
+  compareLockfiles,
   findLockfile,
   parseGitHubLockfile,
   parseSecureciLockfile,
@@ -212,5 +213,104 @@ describe('secureci.lock', () => {
       Object.keys(readLockfile({ kind: 'github', file: github }).actions)
     ).toHaveLength(3);
     fs.rmSync(dir, { recursive: true, force: true });
+  });
+});
+
+describe('compareLockfiles', () => {
+  const a = 'a'.repeat(40);
+  const b = 'b'.repeat(40);
+
+  it('finds nothing when every shared reference agrees', () => {
+    expect(
+      compareLockfiles(
+        { 'org/a@v1': { commit: a, ownerId: 1, repoId: 2 } },
+        { 'org/a@v1': { commit: a, ownerId: 1, repoId: 2 } }
+      )
+    ).toEqual([]);
+  });
+
+  it('reports a reference locked at different commits', () => {
+    expect(
+      compareLockfiles(
+        { 'org/a@v1': { commit: a } },
+        { 'org/a@v1': { commit: b } }
+      )
+    ).toEqual([{ uses: 'org/a@v1', field: 'commit', secureci: a, github: b }]);
+  });
+
+  it('reports a different repository identity, only where both record it', () => {
+    expect(
+      compareLockfiles(
+        {
+          'org/a@v1': { commit: a, ownerId: 1, repoId: 2 },
+          'org/b@v1': { commit: a, repoId: 5 }
+        },
+        {
+          'org/a@v1': { commit: a, ownerId: 9, repoId: 3 },
+          'org/b@v1': { commit: a, ownerId: 7 }
+        }
+      )
+    ).toEqual([
+      { uses: 'org/a@v1', field: 'owner_id', secureci: 1, github: 9 },
+      { uses: 'org/a@v1', field: 'repo_id', secureci: 2, github: 3 }
+    ]);
+  });
+
+  it('ignores references in only one of the files', () => {
+    // gh actions-lock narrows refs (v4 -> v4.2.1) and records dependencies
+    // SecureCI doesn't follow, so one-sided keys aren't disagreements.
+    expect(
+      compareLockfiles(
+        { 'org/a@v1': { commit: a } },
+        { 'org/b@v1': { commit: b } }
+      )
+    ).toEqual([]);
+  });
+
+  it('lists disagreements sorted by reference', () => {
+    const found = compareLockfiles(
+      { 'org/z@v1': { commit: a }, 'org/a@v1': { commit: a } },
+      { 'org/z@v1': { commit: b }, 'org/a@v1': { commit: b } }
+    );
+    expect(found.map((m) => m.uses)).toEqual(['org/a@v1', 'org/z@v1']);
+  });
+});
+
+// One workflow with the secureci.lock that `secureci inventory --update-lock`
+// writes for it and the actions.lock that `gh actions-lock` writes for it
+// (test/fixtures/lockfiles). Both must pin every action at the same commit.
+describe('secureci.lock and actions.lock for the same workflow', () => {
+  const fixtures = path.join(__dirname, '..', 'test', 'fixtures', 'lockfiles');
+  const read = (name: string) =>
+    fs.readFileSync(path.join(fixtures, name), 'utf-8');
+  const secureci = parseSecureciLockfile(read('secureci.lock')).actions;
+  const github = parseGitHubLockfile(read('actions.lock')).actions;
+  const workflowUses = [...read('ci.yml').matchAll(/uses:\s*([^\s#]+)/g)].map(
+    (m) => m[1]
+  );
+
+  it('locks every action the workflow uses in both files', () => {
+    expect(workflowUses.length).toBeGreaterThan(0);
+    for (const uses of workflowUses) {
+      expect(secureci[uses], `${uses} in secureci.lock`).toBeDefined();
+      expect(github[uses], `${uses} in actions.lock`).toBeDefined();
+    }
+  });
+
+  it('records the same commit SHA and repository identity in both', () => {
+    for (const uses of workflowUses) {
+      expect(secureci[uses].commit).toBe(github[uses].commit);
+      expect(secureci[uses].ownerId).toBe(github[uses].ownerId);
+      expect(secureci[uses].repoId).toBe(github[uses].repoId);
+    }
+    expect(compareLockfiles(secureci, github)).toEqual([]);
+  });
+
+  it('pins each SHA-pinned reference at the SHA it names', () => {
+    for (const uses of workflowUses) {
+      const pinned = uses.split('@')[1];
+      expect(secureci[uses].commit).toBe(pinned);
+      expect(github[uses].commit).toBe(pinned);
+    }
   });
 });
