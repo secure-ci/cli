@@ -31,9 +31,13 @@ export function parsePipelineContract(filePath: string): PipelineContractSpec {
   if (!fs.existsSync(filePath)) {
     throw new Error(`Contract file not found: ${filePath}`);
   }
+  return parsePipelineContractText(fs.readFileSync(filePath, 'utf-8'));
+}
 
-  const content = fs.readFileSync(filePath, 'utf-8');
-
+/** Parse a pipeline contract's YAML text (see parsePipelineContract). */
+export function parsePipelineContractText(
+  content: string
+): PipelineContractSpec {
   let parsed: unknown;
   try {
     parsed = YAML.parse(content);

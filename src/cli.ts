@@ -19,23 +19,12 @@ import {
 } from './runner/action-fetcher';
 import { Progress } from './utils/progress';
 import { resolveContractSource } from './contract-source';
-import {
-  mergeValidationResults,
-  validateWorkflow,
-  validateAction
-} from './parser/validator';
 import { parseFile } from './parser/workflow-parser';
 import { parsePipelineContract } from './parser/pipeline-contract-parser';
-import {
-  validatePipelineContract,
-  ContractRecurse
-} from './parser/pipeline-contract-validator';
-import {
-  ContractInfo,
-  formatReport,
-  ReportEntry,
-  ReportFormat
-} from './report';
+import { ContractRecurse } from './parser/pipeline-contract-validator';
+import { ContractInfo, formatReport, ReportFormat } from './report';
+import { failedEntry, validateFiles } from './validate';
+import { diskFiles } from './utils/files';
 import { renderInitWorkflow } from './init';
 import { findUsesSites, localPinTargets, pinContent } from './pin';
 import {
@@ -49,16 +38,15 @@ import {
 import {
   AdvisoryChecker,
   AdvisoryReport,
-  checkFileAdvisories,
   describeReport,
-  FailOn,
   mergeReports,
   targetsFromInventory
 } from './advisories';
 import {
   addTransitive,
-  buildInventory,
   diffLock,
+  directActions,
+  lockEntries,
   mergeLock,
   InventoryAction,
   LockEntry,
@@ -71,7 +59,6 @@ import {
   readLockfile,
   serializeSecureciLockfile
 } from './github-lockfile';
-import type { ValidationResult } from './types';
 import { logger, LogLevel } from './utils/logger';
 import { loadKeyValues } from './utils/env-file';
 import {
@@ -445,7 +432,7 @@ program
       }
     ) => {
       files.forEach(requireFile);
-      await validateFiles(
+      await runValidate(
         files,
         options.contract,
         options.contractRecurse,
@@ -628,17 +615,11 @@ async function workflowUses(
   const uses = new Set<string>();
   for (const file of files) {
     try {
-      const parsed = parseFile(file);
-      if (parsed.type !== 'workflow') continue;
-      const inv = await buildInventory({
-        type: 'workflow',
-        path: file,
-        file: parsed.file
-      });
-      inv.actions.forEach((action) => uses.add(action.uses));
+      (await directActions([file])).forEach((action) => uses.add(action.uses));
     } catch (error) {
+      const cause = (error as Error).cause;
       logger.warn(
-        `Could not read ${file} (${error instanceof Error ? error.message : 'Unknown error'}), so every entry in ${lockName} is kept.`
+        `Could not read ${file} (${cause instanceof Error ? cause.message : 'Unknown error'}), so every entry in ${lockName} is kept.`
       );
       return undefined;
     }
@@ -705,29 +686,13 @@ async function runInventory(
   targets.forEach(requireFile);
 
   // Merge every file's remote actions by `uses`.
-  const byUses = new Map<string, InventoryAction>();
-  for (const file of targets) {
-    try {
-      const parsed = parseFile(file);
-      if (parsed.type !== 'workflow') continue;
-      const inv = await buildInventory({
-        type: 'workflow',
-        path: file,
-        file: parsed.file
-      });
-      for (const action of inv.actions) {
-        const existing = byUses.get(action.uses);
-        if (existing) existing.paths.push(...action.paths);
-        else byUses.set(action.uses, { ...action });
-      }
-    } catch (error) {
-      logger.error(
-        `Could not read ${file}: ${error instanceof Error ? error.message : 'Unknown error'}`
-      );
-      process.exit(1);
-    }
+  let direct: InventoryAction[];
+  try {
+    direct = await directActions(targets);
+  } catch (error) {
+    logger.error((error as Error).message);
+    process.exit(1);
   }
-  const direct = [...byUses.values()];
 
   const lockPath = path.join(process.cwd(), LOCKFILE_NAME);
   // secureci.lock is first-class; GitHub's actions.lock is used only when
@@ -869,16 +834,7 @@ async function runInventory(
   );
   logger.setLevel(level);
 
-  const current: Record<string, LockEntry> = {};
-  for (const action of actions) {
-    if (!action.resolvedSha) continue;
-    current[action.uses] = {
-      commit: action.resolvedSha,
-      ...(action.ownerId !== undefined ? { ownerId: action.ownerId } : {}),
-      ...(action.repoId !== undefined ? { repoId: action.repoId } : {}),
-      ...(action.via ? { via: action.via } : {})
-    };
-  }
+  const current = lockEntries(actions);
 
   // --dry-run: print the resolved inventory as JSON, touching nothing.
   if (options.dryRun) {
@@ -1352,68 +1308,7 @@ async function runUpdate(
   if (unreadable) process.exit(1);
 }
 
-async function validateOneFile(
-  filePath: string,
-  contractFile: string | undefined,
-  recurse: ContractRecurse,
-  say: (fn: () => void) => void,
-  advisories: { checker: AdvisoryChecker; reports: AdvisoryReport[] },
-  offline: boolean
-): Promise<ValidationResult> {
-  const parsed = parseFile(filePath);
-  let result: ValidationResult;
-
-  if (parsed.type === 'workflow') {
-    result = validateWorkflow(filePath);
-    say(() => logger.info(`Validating workflow: ${filePath}`));
-  } else {
-    result = validateAction(filePath);
-    say(() => logger.info(`Validating action: ${filePath}`));
-  }
-
-  let failOn: FailOn | undefined;
-  if (contractFile) {
-    say(() =>
-      logger.info(`Validating against pipeline contract: ${contractFile}`)
-    );
-    if (parsed.type !== 'workflow') {
-      result = {
-        valid: false,
-        errors: [
-          ...result.errors,
-          {
-            path: 'root',
-            message:
-              'Pipeline contracts validate job/step sequences and only apply to workflow files, not actions',
-            severity: 'error' as const
-          }
-        ]
-      };
-    } else {
-      const spec = parsePipelineContract(contractFile);
-      failOn = spec.advisories?.failOn;
-      const contractResult = await validatePipelineContract(parsed, spec, {
-        recurse,
-        offline
-      });
-      result = mergeValidationResults(result, contractResult);
-    }
-  }
-
-  // Known security advisories for the file's own uses: references.
-  const { errors, report } = await checkFileAdvisories(
-    parsed,
-    advisories.checker,
-    failOn
-  );
-  advisories.reports.push(report);
-  return {
-    valid: result.valid && errors.every((e) => e.severity !== 'error'),
-    errors: [...result.errors, ...errors]
-  };
-}
-
-async function validateFiles(
+async function runValidate(
   files: string[],
   contractFile: string | undefined,
   recurse: ContractRecurse,
@@ -1463,45 +1358,36 @@ async function validateFiles(
   }
 
   // One lookup per repository across all files (and a 24h disk cache).
-  const advisories = {
-    checker: new AdvisoryChecker({ offline }),
-    reports: [] as AdvisoryReport[]
-  };
-  const entries: ReportEntry[] = [];
-  for (const filePath of files) {
-    try {
-      if (contractError) throw new Error(contractError);
-      const result = await validateOneFile(
-        filePath,
-        contractPath,
+  const { entries, advisories } = contractError
+    ? {
+        entries: files.map((file) =>
+          failedEntry(file, new Error(contractError))
+        ),
+        advisories: [] as AdvisoryReport[]
+      }
+    : await validateFiles(files, {
+        files: diskFiles,
+        contract: contractPath
+          ? () => parsePipelineContract(contractPath as string)
+          : undefined,
         recurse,
-        say,
-        advisories,
-        offline
-      );
-      entries.push({ file: filePath, result });
-    } catch (error) {
-      entries.push({
-        file: filePath,
-        result: {
-          valid: false,
-          errors: [
-            {
-              path: 'root',
-              message: error instanceof Error ? error.message : 'Unknown error',
-              severity: 'error'
-            }
-          ]
-        }
+        offline,
+        advisories: new AdvisoryChecker({ offline }),
+        onStage: (stage, file) =>
+          say(() =>
+            logger.info(
+              stage === 'contract'
+                ? `Validating against pipeline contract: ${contractPath}`
+                : `Validating ${stage}: ${file}`
+            )
+          )
       });
-    }
-  }
 
   const allValid = entries.every((e) => e.result.valid);
 
   // What couldn't be checked, once for all files: warnings on stderr, and
   // (text mode only) unknown versions as info. Findings are in the results.
-  for (const line of describeReport(mergeReports(advisories.reports))) {
+  for (const line of describeReport(mergeReports(advisories))) {
     if (line.kind !== 'note') continue;
     if (line.level === 'warn') logger.warn(line.text);
     else say(() => logger.info(line.text));

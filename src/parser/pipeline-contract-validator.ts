@@ -1,5 +1,3 @@
-import * as fs from 'fs';
-import * as path from 'path';
 import {
   PipelineContractEntry,
   PipelineContractSpec,
@@ -12,7 +10,7 @@ import {
 import { topologicalJobOrder } from '../runner/job-plan';
 import { parseFile } from './workflow-parser';
 import { forbiddenTriggerErrors } from './dangerous-triggers';
-import { repositoryRoot } from '../utils/repository';
+import { diskFiles, FileSource } from '../utils/files';
 import { fetchAction, fetchRepoFile } from '../runner/action-fetcher';
 import { findLockfile, readLockfile } from '../github-lockfile';
 import { contractPermissionErrors } from './permissions';
@@ -80,7 +78,8 @@ interface PipelineGraph {
  * Composite actions (`uses: ./path`) and reusable workflows
  * (`jobs.<id>.uses: ./path.yml`) are resolved recursively, so wrapping an
  * action doesn't hide it: local ones by default, remote ones too with
- * `recurse: 'all'` (`offline`: only from the cache). Ordering follows
+ * `recurse: 'all'` (`offline`: only from the cache). Local files and the
+ * lockfile are read from `files` (default: the disk). Ordering follows
  * what GitHub guarantees: steps of a job run in order, and a job runs after
  * the jobs it (transitively) `needs:`; jobs with no such relationship may
  * run in parallel, so neither is "before" the other.
@@ -88,12 +87,18 @@ interface PipelineGraph {
 export async function validatePipelineContract(
   parsed: ParsedWorkflow,
   spec: PipelineContractSpec,
-  options: { recurse?: ContractRecurse; offline?: boolean } = {}
+  options: {
+    recurse?: ContractRecurse;
+    offline?: boolean;
+    files?: FileSource;
+  } = {}
 ): Promise<ValidationResult> {
+  const files = options.files ?? diskFiles;
   const graph = await buildGraph(
     parsed,
     options.recurse ?? 'local',
-    options.offline ?? false
+    options.offline ?? false,
+    files
   );
   const { sequence, nodes } = graph;
   const errors: ValidationError[] = [...graph.errors];
@@ -271,7 +276,7 @@ export async function validatePipelineContract(
   }
 
   if (spec.lockfile?.required) {
-    errors.push(...checkLockfile(parsed, sequence.filter(isRemote)));
+    errors.push(...checkLockfile(parsed, sequence.filter(isRemote), files));
   }
 
   // The workflow file's own permissions; called workflows are validated as
@@ -299,9 +304,10 @@ export async function validatePipelineContract(
  */
 function checkLockfile(
   parsed: ParsedWorkflow,
-  remote: UsageEntry[]
+  remote: UsageEntry[],
+  files: FileSource
 ): ValidationError[] {
-  const source = findLockfile(repositoryRoot(parsed.path));
+  const source = findLockfile(files.root(parsed.path), files);
   if (!source) {
     return [
       {
@@ -312,11 +318,11 @@ function checkLockfile(
       }
     ];
   }
-  const name = path.basename(source.file);
+  const name = source.kind === 'github' ? 'actions.lock' : 'secureci.lock';
   let locked: Set<string>;
   try {
     locked = new Set(
-      Object.keys(readLockfile(source).actions).map((uses) => {
+      Object.keys(readLockfile(source, files).actions).map((uses) => {
         const { name: n, version } = splitActionRef(uses);
         return version === undefined ? n : `${n}@${version}`;
       })
@@ -360,10 +366,11 @@ function needsTransitively(
 async function buildGraph(
   parsed: ParsedWorkflow,
   recurse: ContractRecurse,
-  offline: boolean
+  offline: boolean,
+  files: FileSource
 ): Promise<PipelineGraph> {
   const graph: PipelineGraph = { sequence: [], nodes: new Map(), errors: [] };
-  const root = repositoryRoot(parsed.path);
+  const root = files.root(parsed.path);
 
   // `if:` conditions are decided, where they can be, for each trigger of
   // the workflow (called workflows run with their caller's event). With
@@ -397,18 +404,16 @@ async function buildGraph(
   ): Promise<string | null | undefined> => {
     if (isLocal(uses)) {
       if (recurse === 'none') return undefined;
-      const target = path.resolve(
+      const target = files.resolve(
         kind === 'action' ? root : workflowRoot,
         uses
       );
       const names = kind === 'action' ? ['action.yml', 'action.yaml'] : [];
       for (const candidate of [
         target,
-        ...names.map((n) => path.join(target, n))
+        ...names.map((n) => files.resolve(target, n))
       ]) {
-        if (fs.existsSync(candidate) && fs.statSync(candidate).isFile()) {
-          return candidate;
-        }
+        if (files.isFile(candidate)) return candidate;
       }
       graph.errors.push({
         path: at,
@@ -438,11 +443,11 @@ async function buildGraph(
   /** Parse an action/workflow file, recording an error if it's invalid. */
   const parse = (file: string, at: string) => {
     try {
-      return parseFile(file);
+      return parseFile(file, files);
     } catch (error) {
       graph.errors.push({
         path: at,
-        message: `Could not parse ${path.relative(root, file)}: ${error instanceof Error ? error.message : String(error)}`,
+        message: `Could not parse ${files.relative(root, file)}: ${error instanceof Error ? error.message : String(error)}`,
         severity: 'error'
       });
       return null;
@@ -455,7 +460,7 @@ async function buildGraph(
       graph.errors.push({
         path: at,
         message: `Action/workflow cycle: ${[...stack, file]
-          .map((f) => path.relative(root, f))
+          .map((f) => files.relative(root, f))
           .join(' -> ')}`,
         severity: 'error'
       });
@@ -585,7 +590,7 @@ async function buildGraph(
             ids.push(
               ...(await addWorkflow(
                 called.file,
-                repositoryRoot(file),
+                files.root(file),
                 `${node}>`,
                 `${labelPrefix}${jobId} > ${job.uses} > `,
                 `${jobPath} > ${job.uses} > `,
@@ -624,7 +629,7 @@ async function buildGraph(
     '',
     '',
     [],
-    [path.resolve(parsed.path)],
+    [files.resolve(parsed.path)],
     known.map(() => true)
   );
   return graph;

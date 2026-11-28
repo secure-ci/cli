@@ -5,7 +5,7 @@ import * as path from 'path';
 import * as YAML from 'yaml';
 import {
   collectReferences,
-  buildInventory,
+  workflowInventory,
   addTransitive,
   diffLock,
   mergeLock,
@@ -94,7 +94,7 @@ describe('collectReferences', () => {
   });
 });
 
-describe('buildInventory', () => {
+describe('workflowInventory', () => {
   let root: string;
   beforeEach(() => {
     root = fs.mkdtempSync(path.join(os.tmpdir(), 'secureci-inv-'));
@@ -113,7 +113,7 @@ describe('buildInventory', () => {
     });
     const resolver = async (uses: string) =>
       uses.startsWith('actions/checkout') ? 'c'.repeat(40) : undefined;
-    const inv = await buildInventory(wf, resolver);
+    const inv = await workflowInventory(wf, resolver);
 
     const checkout = inv.actions.find((a) => a.owner === 'actions')!;
     expect(checkout.resolvedSha).toBe('c'.repeat(40));
@@ -204,7 +204,7 @@ describe('addTransitive', () => {
     const resolveSha = async (uses: string) => resolved[uses];
     const fetched: string[] = [];
     const queued: string[] = [];
-    const inv = await buildInventory(wf, resolveSha);
+    const inv = await workflowInventory(wf, resolveSha);
     const all = await addTransitive(inv.actions, {
       resolveSha,
       onQueue: (a) => queued.push(a.uses),
@@ -248,7 +248,7 @@ describe('addTransitive', () => {
       a: { 'runs-on': 'x', steps: [{ uses: `org/gone@${sha('9')}` }] }
     });
     const warnings: string[] = [];
-    const inv = await buildInventory(wf);
+    const inv = await workflowInventory(wf);
     const all = await addTransitive(inv.actions, {
       fetch: async () => null,
       warn: (m) => warnings.push(m)
@@ -273,7 +273,7 @@ describe('addTransitive', () => {
     const wf = workflow(root, {
       a: { 'runs-on': 'x', steps: [{ uses: `org/a@${sha('a')}` }] }
     });
-    const inv = await buildInventory(wf);
+    const inv = await workflowInventory(wf);
     const all = await addTransitive(inv.actions, {
       fetch: async (u) => files[u] ?? null,
       warn: () => {}

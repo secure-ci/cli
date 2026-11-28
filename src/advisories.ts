@@ -8,6 +8,7 @@ import {
   serverUrl
 } from './runner/action-fetcher';
 import { collectReferences } from './inventory';
+import type { FileSource } from './utils/files';
 import type { InventoryAction, Reference } from './inventory';
 import type { ParsedFile, ValidationError } from './types';
 
@@ -769,11 +770,12 @@ export function describeReport(
  */
 export async function checkFileAdvisories(
   parsed: ParsedFile,
-  checker: AdvisoryChecker,
-  failOn?: FailOn
+  checker: Pick<AdvisoryChecker, 'check'>,
+  failOn?: FailOn,
+  files?: FileSource
 ): Promise<{ errors: ValidationError[]; report: AdvisoryReport }> {
   const report = await checker.check(
-    targetsFromReferences(collectReferences(parsed))
+    targetsFromReferences(collectReferences(parsed, { files }))
   );
   return { errors: advisoryValidationErrors(report, failOn), report };
 }

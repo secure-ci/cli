@@ -11,6 +11,7 @@ import {
   readLockfile,
   serializeSecureciLockfile
 } from './github-lockfile';
+import { memoryFiles } from './utils/files';
 
 // Shape written by `gh actions-lock` (github/gh-actions-lock), v0.0.2.
 const SAMPLE = [
@@ -129,6 +130,21 @@ describe('findLockfile', () => {
       kind: 'secureci',
       file: path.join(dir, 'secureci.lock')
     });
+  });
+});
+
+describe('findLockfile and readLockfile on given files', () => {
+  it("finds and reads GitHub's actions.lock among in-memory files", () => {
+    const files = memoryFiles({ '.github/workflows/actions.lock': SAMPLE });
+    const source = findLockfile('', files);
+    expect(source).toEqual({ kind: 'github', file: GITHUB_LOCKFILE });
+    expect(readLockfile(source!, files)).toEqual(parseGitHubLockfile(SAMPLE));
+  });
+
+  it('throws when the lockfile is not among the files', () => {
+    expect(() =>
+      readLockfile({ kind: 'secureci', file: 'secureci.lock' }, memoryFiles({}))
+    ).toThrow('Lockfile not found: secureci.lock');
   });
 });
 

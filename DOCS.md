@@ -53,6 +53,11 @@ introduction and install steps, see the [README](README.md).
   - [Default environment variables](#default-environment-variables)
   - [Secret masking](#secret-masking)
 - [Remote action support](#remote-action-support)
+- [Library use](#library-use)
+  - [Validate](#validate)
+  - [Inventory and lockfiles](#inventory-and-lockfiles)
+  - [Pin and update](#pin-and-update)
+  - [Network access: resolvers and fetchers](#network-access-resolvers-and-fetchers)
 - [Architecture](#architecture)
 
 ## Commands at a glance
@@ -1149,6 +1154,172 @@ secureci run .github/workflows/ci.yml
 # - uses: owner/repo/action@v1
 ```
 
+## Library use
+
+`@secureci/cli` also exports its checks and fixes as functions (since
+v1.6.0), for tools that have a repository's files but no checkout, such as a
+GitHub App that reads `.github/` through the API. They work on file
+contents, never on paths on disk:
+
+- Files are a `RepoFiles` object: repository-relative path to text, e.g.
+  `{ '.github/workflows/ci.yml': '…', '.github/actions/build/action.yml': '…' }`.
+  Local `./` composite actions and reusable workflows resolve within it, the
+  way GitHub resolves them against the repository root. A reference to a
+  file that isn't in the object (or that leaves the repository, `../`) is
+  treated as missing; nothing is read from disk.
+- Anything that needs the network (resolving a tag to a commit, fetching a
+  remote action, looking up advisories) is a function you pass in. Without
+  one, that step is skipped and the library makes no network calls.
+- `pinContent`, `updateContent` and `applyEdits` take and return a file's
+  text, so you write the result back however you like (for example, as a
+  commit on a branch).
+
+```ts
+import {
+  validate,
+  buildInventory,
+  lockEntries,
+  diffLock,
+  parseSecureciLockfile,
+  pinContent,
+  parseActionSpec,
+  latestTag,
+  updateContent
+} from '@secureci/cli';
+```
+
+The exported API is `validate`, `buildInventory`, `lockEntries`, `diffLock`,
+`mergeLock`, `parseSecureciLockfile`, `parseGitHubLockfile`,
+`serializeSecureciLockfile`, `pinContent`, `applyEdits`, `parseActionSpec`,
+`updateContent` and `latestTag`, with their types. The parser, validator,
+dry-run and executor exports that were there before are unchanged.
+
+### Validate
+
+`validate(files, options?)` returns the same report as
+`secureci validate --format json`: one file gives `{ file, valid, errors }`,
+several give `{ valid, files: [...] }`, and each error has `path`,
+`message`, `severity` and `rule`. By default it validates every workflow in
+`.github/workflows/` (`*.yml` and `*.yaml`, not subdirectories); pass
+`paths` to choose files, actions included.
+
+```ts
+const report = await validate(files, {
+  // Optional: a pipeline contract's YAML, and what to record about it.
+  contract: { source: 'org/policy/contract.yml@v1', content: contractYaml },
+  // 'local' (default) or 'none'. Remote actions are not fetched.
+  contractRecurse: 'local',
+  // Optional: advisory lookups (see below). Omitted, none are made.
+  advisories: myAdvisorySource
+});
+if (!report.valid) {
+  // report.errors, or report.files[i].errors for several files
+}
+```
+
+The checks are the ones `validate` runs: structure, `if:` expressions,
+template injection, `GITHUB_TOKEN` permissions, dangerous triggers (with
+`# secureci-allow` comments), then the contract (its `lockfile.required`
+looks for `secureci.lock` or `.github/workflows/actions.lock` in `files`),
+then advisories. A contract that can't be parsed, or a path that isn't in
+`files`, is a `root` error on that file, as on the command line. The library
+doesn't resolve a contract given as `owner/repo/path@ref`: fetch it yourself
+and pass its text, with `ref` and `commit` if you want them in the report.
+
+`advisories` is an object with `check(targets)`, returning an
+`AdvisoryReport` (`findings`, `unknownVersions`, `unchecked`, `stale`). Each
+finding becomes a `secureci/vulnerable-action` error or warning, using the
+contract's `advisories.fail-on` threshold (default `high`).
+
+### Inventory and lockfiles
+
+`buildInventory(files, options?)` lists the remote actions and reusable
+workflows the workflows use, as `secureci inventory --dry-run` does,
+following local composite actions and reusable workflows through `files`.
+It returns `{ actions, warnings }`, with `actions` sorted by `uses`.
+
+```ts
+const { actions, warnings } = await buildInventory(files, {
+  resolveSha: (uses) => myResolver(uses), // 'owner/repo@v4' -> SHA or undefined
+  fetch: (uses, kind) => myFetch(uses, kind) // text of action.yml / workflow, or null
+});
+
+const current = lockEntries(actions); // { 'owner/repo@v4': { commit, ... } }
+const lock = parseSecureciLockfile(files['secureci.lock']);
+const diff = diffLock(current, lock); // { changed, drifted, added, removed, identity }
+```
+
+- Without `resolveSha`, only references already pinned to a full SHA get a
+  `resolvedSha`.
+- With `fetch`, remote composite actions and reusable workflows are read at
+  their resolved commit and the actions they use are added, with `via`
+  naming the references that pull them in (as on the command line). A
+  `fetch` that returns `null` adds a warning. Without `fetch`, only direct
+  references are listed.
+- Repository ids (`ownerId`, `repoId`) aren't looked up. Set them on the
+  actions before `lockEntries` to record them in the lock.
+- `lockEntries` leaves out actions that didn't resolve. Its result is what
+  `diffLock`, `mergeLock` and `serializeSecureciLockfile` take.
+  `serializeSecureciLockfile(entries)` returns the text of `secureci.lock`;
+  `parseGitHubLockfile(text)` reads GitHub's `actions.lock`.
+- A workflow that can't be parsed throws `Could not read <path>: <reason>`.
+
+### Pin and update
+
+```ts
+// Pin every tag to its commit, keeping the tag in a comment.
+const pinned = await pinContent(text, myResolver, { allow: ['my-org'] });
+// pinned.content, pinned.changes, pinned.unresolved, pinned.allowed
+
+// Move an action to a version, re-pinned.
+const spec = parseActionSpec('actions/checkout@v4.2.2');
+// { name, owner, repo, ref }; ref is undefined for "latest release"
+const ref = spec.ref ?? latestTag(await myListTags(spec.owner, spec.repo));
+const sha = await myResolver(`${spec.owner}/${spec.repo}@${ref}`);
+const updated = updateContent(text, { name: spec.name, ref, sha });
+// updated.content, updated.changes, updated.skipped, updated.matched
+```
+
+Both edit the text in place, as `secureci pin` and `secureci update` do:
+only the `uses:` value and its trailing comment change. `applyEdits(text,
+edits)` applies `{ start, end, text }` replacements, for your own edits.
+
+### Network access: resolvers and fetchers
+
+On the command line, `secureci` resolves a tag to a commit through the
+GitHub REST API (`GET /repos/{owner}/{repo}/commits/{ref}`) when it has a
+token (`$GITHUB_TOKEN`, `$GH_TOKEN` or `gh auth token`), retrying
+anonymously if the token is rejected, and otherwise with anonymous
+`git ls-remote`. It downloads remote actions into `~/.secureci/actions-cache`
+and caches advisories in `~/.secureci/advisories`.
+
+The library does none of that by itself. `ShaResolver` is
+`(uses: string) => Promise<string | undefined>`: given `owner/repo@ref`
+(or `owner/repo/path@ref`), return the 40-character commit SHA, or
+`undefined` when it can't be resolved. Pass one backed by your own client,
+for example a GitHub App installation token:
+
+```ts
+const resolveSha: ShaResolver = async (uses) => {
+  const at = uses.lastIndexOf('@');
+  const [owner, repo] = uses.slice(0, at).split('/');
+  const res = await fetch(
+    `https://api.github.com/repos/${owner}/${repo}/commits/${encodeURIComponent(uses.slice(at + 1))}`,
+    {
+      headers: {
+        Authorization: `Bearer ${installationToken}`,
+        Accept: 'application/vnd.github.sha'
+      }
+    }
+  );
+  return res.ok ? (await res.text()).trim() : undefined;
+};
+```
+
+`pinContent` calls the resolver once per distinct reference in a file.
+`buildInventory` calls it for each reference that isn't pinned, and its
+`fetch` for each remote composite action or reusable workflow it follows.
+
 ## Architecture
 
 ```
@@ -1163,6 +1334,8 @@ src/
 ├── contract-source.ts        # --contract from a path or owner/repo/path@ref
 ├── init.ts                   # `secureci init` workflow generator
 ├── index.ts                  # Library exports
+├── library.ts                # Library API on file contents (validate, buildInventory)
+├── validate.ts               # What `validate` checks per file (CLI and library)
 ├── version.ts                # --version (embedded in the standalone binary)
 ├── parser/
 │   ├── workflow-parser.ts    # Parse workflow and action YAML
@@ -1199,6 +1372,7 @@ src/
 │   ├── ansi.ts               # Terminal colours
 │   ├── key-value.ts          # --input/--secret/--env/--var parsing
 │   ├── env-file.ts           # --env-file/--secret-file/... parsing and precedence
+│   ├── files.ts              # Where checks read files from: disk, or in-memory contents
 │   └── repository.ts         # Repository root for ./ references
 └── types/
     └── index.ts              # TypeScript types

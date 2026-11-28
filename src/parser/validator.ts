@@ -1,4 +1,3 @@
-import * as fs from 'fs';
 import { parseWorkflow, parseAction } from './workflow-parser';
 import {
   ActionFile,
@@ -11,6 +10,7 @@ import { actionInjectionErrors, workflowInjectionErrors } from './injection';
 import { workflowPermissionErrors } from './permissions';
 import { dangerousTriggerErrors } from './dangerous-triggers';
 import { stepAllowComments } from './allow-comments';
+import { diskFiles, FileSource } from '../utils/files';
 
 /**
  * Invalid `if:` expressions in a workflow: syntax errors, or contexts and
@@ -54,13 +54,17 @@ export function actionExpressionErrors(action: ActionFile): ValidationError[] {
 }
 
 /**
- * Validate a workflow file
+ * Validate a workflow file, read (with the files its `./` references
+ * reach) from `files`.
  */
-export function validateWorkflow(filePath: string): ValidationResult {
+export function validateWorkflow(
+  filePath: string,
+  files: FileSource = diskFiles
+): ValidationResult {
   const errors: ValidationError[] = [];
 
   try {
-    const parsed = parseWorkflow(filePath);
+    const parsed = parseWorkflow(filePath, files);
     const workflow = parsed.file;
 
     // Validate name
@@ -142,15 +146,12 @@ export function validateWorkflow(filePath: string): ValidationResult {
     }
 
     errors.push(...workflowExpressionErrors(workflow));
-    errors.push(...workflowInjectionErrors(workflow, filePath));
+    errors.push(...workflowInjectionErrors(workflow, filePath, files));
     errors.push(...workflowPermissionErrors(workflow));
     errors.push(
       ...dangerousTriggerErrors(
         workflow,
-        stepAllowComments(
-          fs.readFileSync(filePath, 'utf-8'),
-          'dangerous-trigger'
-        )
+        stepAllowComments(files.read(filePath) ?? '', 'dangerous-trigger')
       )
     );
   } catch (error) {
@@ -193,13 +194,17 @@ export function mergeValidationResults(
 }
 
 /**
- * Validate an action file
+ * Validate an action file, read (with the files its `./` references
+ * reach) from `files`.
  */
-export function validateAction(filePath: string): ValidationResult {
+export function validateAction(
+  filePath: string,
+  files: FileSource = diskFiles
+): ValidationResult {
   const errors: ValidationError[] = [];
 
   try {
-    const parsed = parseAction(filePath);
+    const parsed = parseAction(filePath, files);
     const action = parsed.file;
 
     // Validate name
@@ -264,7 +269,7 @@ export function validateAction(filePath: string): ValidationResult {
             }
           });
           errors.push(...actionExpressionErrors(action));
-          errors.push(...actionInjectionErrors(action, filePath));
+          errors.push(...actionInjectionErrors(action, filePath, files));
         }
       }
     }

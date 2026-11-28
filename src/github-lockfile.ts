@@ -1,7 +1,7 @@
-import * as fs from 'fs';
 import * as path from 'path';
 import * as YAML from 'yaml';
 import type { LockEntry, Lockfile } from './inventory';
+import { diskFiles, FileSource } from './utils/files';
 
 /** SecureCI's own lockfile, at the repository root. */
 export const SECURECI_LOCKFILE = 'secureci.lock';
@@ -34,11 +34,14 @@ export interface LockSource {
  * The lockfile to check against: `secureci.lock` when present (it stays
  * first-class), otherwise GitHub's `actions.lock`, otherwise none.
  */
-export function findLockfile(repoRoot: string): LockSource | undefined {
+export function findLockfile(
+  repoRoot: string,
+  files: FileSource = diskFiles
+): LockSource | undefined {
   const secureci = path.join(repoRoot, SECURECI_LOCKFILE);
-  if (fs.existsSync(secureci)) return { kind: 'secureci', file: secureci };
+  if (files.isFile(secureci)) return { kind: 'secureci', file: secureci };
   const github = path.join(repoRoot, GITHUB_LOCKFILE);
-  if (fs.existsSync(github)) return { kind: 'github', file: github };
+  if (files.isFile(github)) return { kind: 'github', file: github };
   return undefined;
 }
 
@@ -150,8 +153,14 @@ export function serializeSecureciLockfile(
 }
 
 /** Read whichever lockfile `findLockfile` found. */
-export function readLockfile(source: LockSource): Lockfile {
-  const text = fs.readFileSync(source.file, 'utf-8');
+export function readLockfile(
+  source: LockSource,
+  files: FileSource = diskFiles
+): Lockfile {
+  const text = files.read(source.file);
+  if (text === undefined) {
+    throw new Error(`Lockfile not found: ${source.file}`);
+  }
   return source.kind === 'github'
     ? parseGitHubLockfile(text)
     : parseSecureciLockfile(text);

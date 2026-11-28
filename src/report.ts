@@ -50,7 +50,27 @@ export interface ReportEntry {
   result: ValidationResult;
 }
 
-function jsonForFile(entry: ReportEntry) {
+/** One file in the `--format json` report. */
+export interface FileReport {
+  file: string;
+  valid: boolean;
+  errors: Array<{
+    path: string;
+    message: string;
+    severity: ValidationError['severity'];
+    rule: string;
+  }>;
+}
+
+/**
+ * The `--format json` report: one file keeps the flat `{ file, valid,
+ * errors }` shape; many become `{ valid, files: [...] }`.
+ */
+export type ValidationReport =
+  | (FileReport & { contract?: ContractInfo })
+  | { valid: boolean; files: FileReport[]; contract?: ContractInfo };
+
+function jsonForFile(entry: ReportEntry): FileReport {
   return {
     file: entry.file,
     valid: entry.result.valid,
@@ -61,6 +81,21 @@ function jsonForFile(entry: ReportEntry) {
       rule: ruleIdFor(e)
     }))
   };
+}
+
+/** The `--format json` report as an object (see ValidationReport). */
+export function buildReport(
+  entries: ReportEntry[],
+  meta: ReportMeta = {}
+): ValidationReport {
+  const contract = meta.contract ? { contract: meta.contract } : {};
+  return entries.length === 1
+    ? { ...jsonForFile(entries[0]), ...contract }
+    : {
+        valid: entries.every((e) => e.result.valid),
+        files: entries.map(jsonForFile),
+        ...contract
+      };
 }
 
 function sarifResults(entry: ReportEntry): SarifResult[] {
@@ -84,18 +119,10 @@ export function formatReport(
   format: Exclude<ReportFormat, 'text'>,
   meta: ReportMeta = {}
 ): string {
-  const contract = meta.contract ? { contract: meta.contract } : {};
   if (format === 'json') {
-    const body =
-      entries.length === 1
-        ? { ...jsonForFile(entries[0]), ...contract }
-        : {
-            valid: entries.every((e) => e.result.valid),
-            files: entries.map(jsonForFile),
-            ...contract
-          };
-    return JSON.stringify(body, null, 2);
+    return JSON.stringify(buildReport(entries, meta), null, 2);
   }
+  const contract = meta.contract ? { contract: meta.contract } : {};
 
   return JSON.stringify(
     {

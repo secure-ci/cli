@@ -36,6 +36,9 @@ A single CLI that understands GitHub Actions the way the runner does:
 - **Inventory** every action a workflow pulls in, resolve each tag to a commit
   SHA, and **catch supply-chain drift** when a tag quietly starts pointing
   somewhere new.
+- **Use it as a library** — validate, inventory, pin and update on file
+  contents (no checkout), with your own resolvers for anything that needs the
+  network ([DOCS.md → Library use](DOCS.md#library-use)).
 
 Because it evaluates expressions and `if:` conditions like GitHub does — honoring
 context-availability rules and rejecting invalid `if:` the same way — you get

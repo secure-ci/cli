@@ -1,5 +1,3 @@
-import * as fs from 'fs';
-import * as path from 'path';
 import {
   ActionFile,
   Step,
@@ -8,7 +6,7 @@ import {
   WorkflowTrigger
 } from '../types';
 import { expressionDataFlow } from '../runner/expression';
-import { repositoryRoot } from '../utils/repository';
+import { diskFiles, FileSource } from '../utils/files';
 import { parseFile } from './workflow-parser';
 
 /**
@@ -185,6 +183,7 @@ function finding(
 }
 
 interface Scan {
+  files: FileSource;
   /** Repository root that local actions (`./...`) resolve against. */
   root: string;
   errors: ValidationError[];
@@ -204,9 +203,9 @@ function checkText(
 }
 
 /** Parse a file reached by recursion, or null if it can't be. */
-function tryParse(file: string) {
+function tryParse(file: string, files: FileSource) {
   try {
-    return parseFile(file);
+    return parseFile(file, files);
   } catch {
     // Not this check's concern: validating that file reports it.
     return null;
@@ -214,13 +213,17 @@ function tryParse(file: string) {
 }
 
 /** The action.yml behind a local `uses: ./path`, if there is one. */
-function resolveLocalAction(uses: string, root: string): string | undefined {
-  const target = path.resolve(root, uses);
+function resolveLocalAction(
+  uses: string,
+  root: string,
+  files: FileSource
+): string | undefined {
+  const target = files.resolve(root, uses);
   return [
     target,
-    path.join(target, 'action.yml'),
-    path.join(target, 'action.yaml')
-  ].find((f) => fs.existsSync(f) && fs.statSync(f).isFile());
+    files.resolve(target, 'action.yml'),
+    files.resolve(target, 'action.yaml')
+  ].find((f) => files.isFile(f));
 }
 
 const isLocal = (uses: string): boolean =>
@@ -249,9 +252,9 @@ function checkSteps(
       );
     }
     if (!isLocal(step.uses)) return;
-    const file = resolveLocalAction(step.uses, scan.root);
+    const file = resolveLocalAction(step.uses, scan.root, scan.files);
     if (!file || stack.includes(file)) return;
-    const parsed = tryParse(file);
+    const parsed = tryParse(file, scan.files);
     if (parsed?.type !== 'action') return;
     checkSteps(
       parsed.file.runs.steps ?? [],
@@ -281,9 +284,9 @@ function checkWorkflow(
     }
     if (!isLocal(job.uses)) continue;
     // A local reusable workflow resolves against its caller's repository.
-    const called = path.resolve(repositoryRoot(file), job.uses);
-    if (stack.includes(called) || !fs.existsSync(called)) continue;
-    const parsed = tryParse(called);
+    const called = scan.files.resolve(scan.files.root(file), job.uses);
+    if (stack.includes(called) || !scan.files.isFile(called)) continue;
+    const parsed = tryParse(called, scan.files);
     if (parsed?.type !== 'workflow') continue;
     checkWorkflow(
       parsed.file,
@@ -305,10 +308,11 @@ function checkWorkflow(
  */
 export function workflowInjectionErrors(
   workflow: WorkflowFile,
-  workflowPath: string
+  workflowPath: string,
+  files: FileSource = diskFiles
 ): ValidationError[] {
-  const file = path.resolve(workflowPath);
-  const scan: Scan = { root: repositoryRoot(file), errors: [] };
+  const file = files.resolve(workflowPath);
+  const scan: Scan = { files, root: files.root(file), errors: [] };
   checkWorkflow(workflow, file, '', [file], scan);
   return scan.errors;
 }
@@ -321,10 +325,11 @@ export function workflowInjectionErrors(
  */
 export function actionInjectionErrors(
   action: ActionFile,
-  actionPath: string
+  actionPath: string,
+  files: FileSource = diskFiles
 ): ValidationError[] {
-  const file = path.resolve(actionPath);
-  const scan: Scan = { root: repositoryRoot(file), errors: [] };
+  const file = files.resolve(actionPath);
+  const scan: Scan = { files, root: files.root(file), errors: [] };
   checkSteps(action.runs?.steps ?? [], 'runs.', BASE_PATTERNS, [file], scan);
   return scan.errors;
 }

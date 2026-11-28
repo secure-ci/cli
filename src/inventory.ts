@@ -1,7 +1,5 @@
-import * as fs from 'fs';
-import * as path from 'path';
 import { parseFile } from './parser/workflow-parser';
-import { repositoryRoot } from './utils/repository';
+import { diskFiles, FileSource } from './utils/files';
 import type { ParsedFile, ParsedWorkflow, Step, WorkflowFile } from './types';
 
 /** A resolved `uses:` reference and where it appears. */
@@ -55,24 +53,24 @@ function classify(uses: string, kind: Reference['kind']): Reference {
  * Also takes a composite action (its steps). `localActions: false` lists
  * but doesn't follow `./` actions: in a downloaded action or workflow they
  * resolve against whatever the caller checked out, which isn't known here.
+ * Local files are read from `files` (default: the disk).
  */
 export function collectReferences(
   parsed: ParsedFile,
-  options: { localActions?: boolean } = {}
+  options: { localActions?: boolean; files?: FileSource } = {}
 ): Reference[] {
   const followLocalActions = options.localActions ?? true;
-  const root = repositoryRoot(parsed.path);
+  const files = options.files ?? diskFiles;
+  const root = files.root(parsed.path);
   const refs: Reference[] = [];
 
   const resolveLocal = (uses: string, names: string[]): string | null => {
-    const target = path.resolve(root, uses);
+    const target = files.resolve(root, uses);
     for (const candidate of [
       target,
-      ...names.map((n) => path.join(target, n))
+      ...names.map((n) => files.resolve(target, n))
     ]) {
-      if (fs.existsSync(candidate) && fs.statSync(candidate).isFile()) {
-        return candidate;
-      }
+      if (files.isFile(candidate)) return candidate;
     }
     return null;
   };
@@ -87,7 +85,7 @@ export function collectReferences(
     if (!file || stack.includes(file) || stack.length >= MAX_DEPTH) return;
     let parsedAction;
     try {
-      parsedAction = parseFile(file);
+      parsedAction = parseFile(file, files);
     } catch {
       return;
     }
@@ -116,7 +114,7 @@ export function collectReferences(
         if (!file || stack.includes(file) || stack.length >= MAX_DEPTH)
           continue;
         try {
-          const called = parseFile(file);
+          const called = parseFile(file, files);
           if (called.type === 'workflow') {
             addWorkflow(called.file, `${jobPath} > ${job.uses} > `, [
               ...stack,
@@ -135,10 +133,10 @@ export function collectReferences(
   };
 
   if (parsed.type === 'workflow') {
-    addWorkflow(parsed.file, '', [path.resolve(parsed.path)]);
+    addWorkflow(parsed.file, '', [files.resolve(parsed.path)]);
   } else if (parsed.file.runs.using === 'composite') {
     (parsed.file.runs.steps ?? []).forEach((s, i) =>
-      addStep(s, `steps[${i}]`, [path.resolve(parsed.path)])
+      addStep(s, `steps[${i}]`, [files.resolve(parsed.path)])
     );
   }
   return refs;
@@ -178,11 +176,12 @@ export type ShaResolver = (uses: string) => Promise<string | undefined>;
  * actions resolved to commit SHAs (an already-pinned ref resolves to
  * itself; otherwise `resolveSha` is consulted).
  */
-export async function buildInventory(
+export async function workflowInventory(
   parsed: ParsedWorkflow,
-  resolveSha?: ShaResolver
+  resolveSha?: ShaResolver,
+  files: FileSource = diskFiles
 ): Promise<Inventory> {
-  const references = collectReferences(parsed);
+  const references = collectReferences(parsed, { files });
   const remote = references.filter(
     (r) => r.kind === 'action' || r.kind === 'reusable-workflow'
   );
@@ -228,15 +227,69 @@ function toAction(ref: Reference): InventoryAction | null {
   };
 }
 
+/**
+ * The distinct remote actions the given workflows use, merged by `uses`
+ * (paths in file order). Files that aren't workflows are skipped. Throws
+ * `Could not read <file>: <reason>` for one that can't be parsed.
+ */
+export async function directActions(
+  workflows: string[],
+  files: FileSource = diskFiles
+): Promise<InventoryAction[]> {
+  const byUses = new Map<string, InventoryAction>();
+  for (const file of workflows) {
+    let inventory: Inventory | undefined;
+    try {
+      const parsed = parseFile(file, files);
+      if (parsed.type !== 'workflow') continue;
+      inventory = await workflowInventory(parsed, undefined, files);
+    } catch (error) {
+      throw new Error(
+        `Could not read ${file}: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        { cause: error }
+      );
+    }
+    for (const action of inventory.actions) {
+      const existing = byUses.get(action.uses);
+      if (existing) existing.paths.push(...action.paths);
+      else byUses.set(action.uses, { ...action });
+    }
+  }
+  return [...byUses.values()];
+}
+
+/**
+ * Lock entries for the actions resolved to a commit, keyed by `uses`, with
+ * the repository identity and `via` when known (unresolved ones are left
+ * out). The input to diffLock, mergeLock and serializeSecureciLockfile.
+ */
+export function lockEntries(
+  actions: InventoryAction[]
+): Record<string, LockEntry> {
+  const entries: Record<string, LockEntry> = {};
+  for (const action of actions) {
+    if (!action.resolvedSha) continue;
+    entries[action.uses] = {
+      commit: action.resolvedSha,
+      ...(action.ownerId !== undefined ? { ownerId: action.ownerId } : {}),
+      ...(action.repoId !== undefined ? { repoId: action.repoId } : {}),
+      ...(action.via ? { via: action.via } : {})
+    };
+  }
+  return entries;
+}
+
 export interface TransitiveDeps {
   /**
-   * Download `owner/repo[/path]@sha` and return the local path of the
-   * action's action.yml (kind `action`) or of the workflow file, or null.
+   * Download `owner/repo[/path]@sha` and return the path, in `files`, of
+   * the action's action.yml (kind `action`) or of the workflow file, or null.
    */
   fetch: (
     uses: string,
     kind: InventoryAction['kind']
   ) => Promise<string | null>;
+  /** Where the fetched paths are read from (default: the disk). */
+  files?: FileSource;
   resolveSha?: ShaResolver;
   warn: (message: string) => void;
   /** Called when a newly found dependency is queued to be read. */
@@ -267,7 +320,7 @@ export async function addTransitive(
     const file = await deps.fetch(`${name}@${at}`, action.kind);
     let parsed: ParsedFile | undefined;
     try {
-      parsed = file ? parseFile(file) : undefined;
+      parsed = file ? parseFile(file, deps.files) : undefined;
     } catch {
       parsed = undefined;
     }
@@ -278,7 +331,10 @@ export async function addTransitive(
       continue;
     }
 
-    for (const ref of collectReferences(parsed, { localActions: false })) {
+    for (const ref of collectReferences(parsed, {
+      localActions: false,
+      files: deps.files
+    })) {
       const refPath = `${action.uses} > ${ref.path}`;
       const known = byUses.get(ref.uses);
       if (known) {

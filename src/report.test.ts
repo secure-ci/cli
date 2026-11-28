@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { formatValidation, formatReport } from './report';
+import { buildReport, formatValidation, formatReport } from './report';
 import type { ValidationResult } from './types';
 
 const bad: ValidationResult = {
@@ -266,6 +266,28 @@ describe('SARIF rule ids', () => {
     expect(log.runs[0].tool.driver.rules).toContainEqual({
       id: 'secureci/permissions',
       name: 'GITHUB_TOKEN permissions'
+    });
+  });
+});
+
+describe('buildReport', () => {
+  it('is the --format json report as an object', () => {
+    const meta = { contract: { source: 'contract.yml' } };
+    for (const entries of [
+      [{ file: 'a.yml', result: bad }],
+      [
+        { file: 'a.yml', result: bad },
+        { file: 'b.yml', result: good }
+      ]
+    ]) {
+      expect(buildReport(entries, meta)).toEqual(
+        JSON.parse(formatReport(entries, 'json', meta))
+      );
+    }
+    expect(buildReport([{ file: 'b.yml', result: good }])).toEqual({
+      file: 'b.yml',
+      valid: true,
+      errors: []
     });
   });
 });

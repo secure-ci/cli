@@ -993,6 +993,50 @@ describe('secureci commands', () => {
     );
   });
 
+  it('validate --format json matches the library validate()', async () => {
+    const { validate } = await import('./library');
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'secureci-lib-cli-'));
+    const files: Record<string, string> = {
+      '.github/workflows/ci.yml': [
+        'name: CI',
+        'on: push',
+        'jobs:',
+        '  build:',
+        '    runs-on: ubuntu-latest',
+        '    steps:',
+        '      - uses: ./.github/actions/greet',
+        '        with:',
+        '          who: ${{ github.event.issue.title }}',
+        ''
+      ].join('\n'),
+      '.github/actions/greet/action.yml': [
+        'name: Greet',
+        'description: Greet someone',
+        'inputs:',
+        '  who:',
+        '    description: Who',
+        'runs:',
+        '  using: composite',
+        '  steps:',
+        '    - run: echo "${{ inputs.who }}"',
+        '      shell: bash',
+        ''
+      ].join('\n')
+    };
+    for (const [file, content] of Object.entries(files)) {
+      fs.mkdirSync(path.join(dir, path.dirname(file)), { recursive: true });
+      fs.writeFileSync(path.join(dir, file), content);
+    }
+    const paths = Object.keys(files);
+    const cli = run(
+      ['validate', ...paths, '--format', 'json', '--offline'],
+      dir
+    );
+    expect(cli.status).toBe(1);
+    expect(JSON.parse(cli.stdout)).toEqual(await validate(files, { paths }));
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
   it('inventory lists resolved actions and tracks drift via a lockfile', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'secureci-inv-cli-'));
     fs.mkdirSync(path.join(dir, '.github', 'workflows'), { recursive: true });
